@@ -15,7 +15,7 @@
 - **Ruta de subida:** ESP32 → Raspberry Pi (HTTP local, sin TLS) → Pi sube a Azure Blob Storage
   - Motivo: evitar fragilidad de TLS/certificados en el ESP32 (memoria limitada); la Pi permite logging, reintentos, resize/compress y metadata antes de subir
 - **Cadencia de captura:** 1 foto cada 3 minutos (fase de portfolio/dataset, no producto en vivo)
-- **Horario de captura:** a definir — probablemente limitado a horas con luz natural suficiente (evita fotos inútiles de noche)
+- **Horario de captura:** el ESP32 no sabe nada de horarios — captura cada 3 min de forma continua (24h) y manda todo a la Pi. La Pi decide, foto a foto, si cae dentro de la ventana de luz usando `astral` (crepúsculo civil `dawn`/`dusk`, con margen de ~15 min antes/después, calculado día a día — se adapta a las estaciones sin tocar código). Si está fuera de ventana, se descarta y no se sube a Blob. La comprobación ocurre en el mismo servicio de la Pi que recibe la foto del ESP32, antes de subir a Blob.
 - **Etiquetado:** manual por el usuario, con Label Studio, usando las predicciones del modelo como pre-anotación (revisión, no etiquetado desde cero)
 - **Estrategia de inferencia/despliegue (v1):**
   - **NO** inferencia en directo desde el principio — no tiene sentido servir rápido un modelo de baja calidad
@@ -30,7 +30,8 @@
 
 ## Puntos pendientes de definir
 
-- Rango horario exacto de captura
+- Prueba de campo con la cámara ya montada: nº de plazas en encuadre, ángulo/perspectiva, nitidez a través del cristal, reflejos/contraluz en distintas franjas horarias
+- Coordenadas exactas a usar en `astral` (Zubiri vs. Pamplona — confirmar ubicación definitiva de la cámara)
 - Cuántos días/fotos de dataset semilla antes del primer entrenamiento
 - Formato exacto de las ROIs (coordenadas, config JSON) y cómo se cargan en Label Studio (clasificación por recorte de plaza vs. anotación completa)
 - Estructura de contenedores/carpetas en Blob (raw/, labeled/, manifest)
@@ -41,10 +42,11 @@
 ## Fases
 
 ### Fase 0 — Puesta a punto física
-- Fijar posición definitiva de la cámara (no debe moverse una vez fijadas las ROIs)
-- Definir horario de captura (24h vs. solo horas de luz)
-- Capturar imagen de referencia y definir ROIs fijas por plaza (config JSON con coordenadas)
-- Validar encuadre: cobertura de todas las plazas objetivo, sin obstrucciones (reflejos, ramas, etc.)
+- Fijar posición definitiva de la cámara con soporte casero, en la ventana ya elegida (no debe moverse una vez fijadas las ROIs)
+- Prueba de campo: firmware mínimo de captura + fotos sueltas en distintos momentos del día para validar nº de plazas en encuadre, ángulo/perspectiva, nitidez y reflejos/contraluz
+- Horario de captura: **decidido** — ESP32 sin lógica de horario (capta 24h cada 3 min), la Pi filtra con `astral` (crepúsculo civil `dawn`/`dusk` + margen ~15 min) antes de subir a Blob
+- Capturar imagen de referencia y definir ROIs fijas por plaza (config JSON con coordenadas; rectángulo simple o polígono de 4 puntos según el ángulo que muestre la prueba de campo)
+- Validar encuadre: cobertura de todas las plazas objetivo, sin obstrucciones (reflejos, ramas, etc.), en varias franjas horarias
 
 ### Fase 1 — Captura (ESP32 → Pi → Blob)
 - Firmware ESP32-CAM: captura periódica (cada 3 min), POST a endpoint local de la Pi
