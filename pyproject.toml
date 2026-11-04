@@ -1,7 +1,28 @@
 [project]
 name = "parkwatch"
 version = "0.1.0"
-description = "Add your description here"
+description = "End-to-end MLOps for parking occupancy: ESP32-CAM -> Raspberry Pi -> Azure Blob -> Label Studio -> Azure ML pipelines"
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+# Local environment: the tools/ scripts (ROIs, static mask, camera drift, holdout).
+# Training and inference run on Azure ML with their own environments (aml/environments/);
+# the Pi installs pi_receiver/requirements.txt.
+dependencies = [
+    "azure-storage-blob>=12.22",
+    "python-dotenv>=1.0",
+    "pillow>=10.4",
+    "numpy>=2",
+    "matplotlib>=3.9",
+    "opencv-python-headless>=4.12",
+    "tzdata>=2024.1",
+]
+
+[dependency-groups]
+# Define and submit the Azure ML pipelines and schedules (aml/pipelines/)
+aml = [
+    "azure-ai-ml==1.27.1",
+    "azure-identity==1.23.0",
+]
+
+[tool.uv]
+default-groups = ["aml"]

@@ -8,3 +8,22 @@ wheels/
 
 # Virtual environments
 .venv
+
+# ParkWatch — secrets and local state
+pi_receiver/.env
+pi_receiver/spool/
+esp32_firmware/**/parkwatch_secrets.h
+tools/.env
+tasks.json
+
+# ParkWatch — personal data and local configuration
+# raw Label Studio exports (they include the user's email)
+label_studio/export_*.json
+# export of the Label Studio Container App (user, deployment ids)
+labelstudio.yaml
+.claude/
+
+# ParkWatch — local data and artifacts (drift, previews, downloaded datasets)
+data/
+mlruns/
+mlflow.db
