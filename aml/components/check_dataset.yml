@@ -1,0 +1,37 @@
+$schema: https://azuremlschemas.azureedge.net/latest/commandComponent.schema.json
+type: command
+name: parkwatch_check_dataset
+display_name: check_dataset
+description: Label Studio export + dataset fingerprint; `changed` decides whether it is rebuilt.
+code: ../../ml
+environment: azureml:parkwatch-data:4
+# Queries external state (Label Studio, data asset registry): never reuse a previous run.
+is_deterministic: false
+inputs:
+  rois:
+    type: uri_file
+  alignment:
+    type: uri_folder
+  ls_url:
+    type: string
+  ls_project:
+    type: integer
+  keyvault_url:
+    type: string
+  asset_name:
+    type: string
+    default: parkwatch-crops
+  force:
+    type: boolean
+    default: false
+outputs:
+  export:
+    type: uri_folder
+  changed:
+    type: boolean  # control output: written by --control-output
+command: >-
+  python check_dataset.py
+  --rois ${{inputs.rois}} --out ${{outputs.export}} --alignment ${{inputs.alignment}}
+  --project ${{inputs.ls_project}} --ls-url ${{inputs.ls_url}}
+  --keyvault-url ${{inputs.keyvault_url}} --asset-name ${{inputs.asset_name}}
+  --force ${{inputs.force}} --control-output

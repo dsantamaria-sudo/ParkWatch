@@ -1,0 +1,18 @@
+name: parkwatch-data
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - azure-identity==1.23.0
+      - azure-storage-blob==12.19.0  # azureml-mlflow 1.60 requires <=12.19.0
+      - azure-keyvault-secrets==4.9.0
+      - azure-ai-ml==1.27.1
+      # pipeline control outputs (check_dataset -> condition)
+      - mlflow-skinny==2.22.0
+      - azureml-mlflow==1.60.0
+      - numpy==2.2.6
+      - pillow==11.2.1
+      # camera drift (align_photos: SIFT + RANSAC)
+      - opencv-python-headless==4.12.0.88

@@ -1,0 +1,26 @@
+$schema: https://azuremlschemas.azureedge.net/latest/commandComponent.schema.json
+type: command
+name: parkwatch_batch_inference
+display_name: batch_inference
+description: The parknet champion predicts the photos of the last days (or of specific days).
+code: ../../ml
+environment: azureml:parkwatch-train:1
+is_deterministic: false  # depends on the champion and on the new photos
+inputs:
+  rois:
+    type: uri_file
+  alignment:
+    type: uri_folder
+  last_days:
+    type: integer
+    default: 3
+  days:
+    type: string
+    optional: true  # "YYYY-MM-DD YYYY-MM-DD": replaces last_days
+outputs:
+  predictions:
+    type: uri_folder
+command: >-
+  python batch_inference.py
+  --rois ${{inputs.rois}} --out ${{outputs.predictions}} --alignment ${{inputs.alignment}} --last-days ${{inputs.last_days}}
+  $[[--days ${{inputs.days}}]]

@@ -1,0 +1,21 @@
+$schema: https://azuremlschemas.azureedge.net/latest/commandComponent.schema.json
+type: command
+name: parkwatch_build_dataset
+display_name: build_dataset
+description: Per-spot crops + manifest.csv + dataset_info.json from the check_dataset export.
+code: ../../ml
+environment: azureml:parkwatch-data:4
+inputs:
+  rois:
+    type: uri_file
+  export:
+    type: uri_folder
+  alignment:
+    type: uri_folder
+outputs:
+  dataset:
+    type: uri_folder
+command: >-
+  python build_dataset.py
+  --rois ${{inputs.rois}} --export-dir ${{inputs.export}} --alignment ${{inputs.alignment}} --out ${{outputs.dataset}}
+  --cache ./raw_cache

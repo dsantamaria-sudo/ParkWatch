@@ -1,0 +1,42 @@
+$schema: https://azuremlschemas.azureedge.net/latest/commandComponent.schema.json
+type: command
+name: parkwatch_train
+display_name: train
+description: ParkNet from scratch; day-grouped cross-validation (or epochs of the last run with CV) and final model.
+code: ../../ml
+environment: azureml:parkwatch-train:1
+inputs:
+  dataset:
+    type: uri_folder
+    mode: download
+  run_cv:
+    type: boolean
+    default: true
+  holdout_days:
+    type: string
+    optional: true  # "YYYY-MM-DD YYYY-MM-DD"; no value = no holdout yet
+  epochs:
+    type: integer
+    default: 40
+  width:
+    type: number
+    default: 1.0
+  input_size:
+    type: integer
+    default: 96
+  crop_margin:
+    type: number
+    default: 0.10
+  jitter:
+    type: number
+    default: 0.0
+outputs:
+  model:
+    type: uri_folder
+command: >-
+  python train.py
+  --data-dir ${{inputs.dataset}} --output-dir ${{outputs.model}}
+  --run-cv ${{inputs.run_cv}} --epochs ${{inputs.epochs}}
+  --width ${{inputs.width}} --input-size ${{inputs.input_size}}
+  --crop-margin ${{inputs.crop_margin}} --jitter ${{inputs.jitter}}
+  $[[--holdout-days ${{inputs.holdout_days}}]]

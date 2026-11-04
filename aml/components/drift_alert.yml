@@ -1,0 +1,12 @@
+$schema: https://azuremlschemas.azureedge.net/latest/commandComponent.schema.json
+type: command
+name: parkwatch_drift_alert
+display_name: drift_alert
+description: Fails (and triggers the Azure Monitor email) if the camera has moved beyond the thresholds.
+code: ../../ml
+environment: azureml:parkwatch-data:4
+is_deterministic: false
+inputs:
+  alignment:
+    type: uri_folder
+command: python drift_alert.py --alignment ${{inputs.alignment}}

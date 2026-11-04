@@ -1,0 +1,6 @@
+$schema: https://azuremlschemas.azureedge.net/latest/environment.schema.json
+name: parkwatch-data
+version: "4"
+description: CPU — check/build dataset (Label Studio + Blob + crops), camera alignment and data asset registration.
+image: mcr.microsoft.com/azureml/openmpi5.0-ubuntu24.04:20261018.v1
+conda_file: parkwatch-data.conda.yml

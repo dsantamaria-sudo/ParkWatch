@@ -1,0 +1,23 @@
+$schema: https://azuremlschemas.azureedge.net/latest/commandComponent.schema.json
+type: command
+name: parkwatch_align_photos
+display_name: align_photos
+description: Measures the camera drift on the new photos and extends the alignment table (parkwatch-alignment).
+code: ../../ml
+environment: azureml:parkwatch-data:4
+is_deterministic: false  # depends on the new photos and on the latest registered table
+inputs:
+  rois:
+    type: uri_file
+  mask:
+    type: uri_file
+  asset_name:
+    type: string
+    default: parkwatch-alignment
+outputs:
+  alignment:
+    type: uri_folder
+command: >-
+  python align_photos.py
+  --rois ${{inputs.rois}} --mask ${{inputs.mask}} --out ${{outputs.alignment}}
+  --asset-name ${{inputs.asset_name}}

@@ -1,0 +1,20 @@
+$schema: https://azuremlschemas.azureedge.net/latest/commandComponent.schema.json
+type: command
+name: parkwatch_promote
+display_name: evaluate_promote
+description: Registers the model in parknet, evaluates new model and champion on the same holdout and promotes if macro F1 >=.
+code: ../../ml
+environment: azureml:parkwatch-train:1
+inputs:
+  model:
+    type: uri_folder
+  dataset:
+    type: uri_folder
+    mode: download
+  holdout_days:
+    type: string
+    optional: true
+command: >-
+  python promote.py
+  --model ${{inputs.model}} --data-dir ${{inputs.dataset}}
+  $[[--holdout-days ${{inputs.holdout_days}}]]

@@ -1,0 +1,27 @@
+$schema: https://azuremlschemas.azureedge.net/latest/commandComponent.schema.json
+type: command
+name: parkwatch_push_to_label_studio
+display_name: push_to_label_studio
+description: Replaces the pre-annotation of unannotated tasks with the champion's predictions.
+code: ../../ml
+environment: azureml:parkwatch-data:4
+is_deterministic: false  # depends on the state of Label Studio
+inputs:
+  predictions:
+    type: uri_folder
+  rois:
+    type: uri_file
+  ls_url:
+    type: string
+  ls_project:
+    type: integer
+  keyvault_url:
+    type: string
+  create_missing:
+    type: boolean
+    default: false
+command: >-
+  python push_to_label_studio.py
+  --predictions ${{inputs.predictions}} --rois ${{inputs.rois}}
+  --project ${{inputs.ls_project}} --ls-url ${{inputs.ls_url}}
+  --keyvault-url ${{inputs.keyvault_url}} --create-missing ${{inputs.create_missing}}
