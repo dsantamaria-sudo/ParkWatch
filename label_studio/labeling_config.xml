@@ -1,0 +1,16 @@
+<!--
+  ParkWatch - parking spot occupancy labeling.
+  One task per photo. Spot polygons (ROIs) are pre-loaded as predictions with
+  region ids = spot ids (p01, p02, ...); the reviewer only fixes wrong labels.
+  Training crops each spot from rois.json and uses only the label, so moving a
+  polygon by accident does not matter.
+-->
+<View>
+  <Header value="Label every parking spot: free, occupied, or exclude if it cannot be judged"/>
+  <Image name="image" value="$image" zoom="true" zoomControl="true" rotateControl="false"/>
+  <PolygonLabels name="spot" toName="image" strokeWidth="2" opacity="0.35" pointSize="small">
+    <Label value="free" background="#2ecc71" hotkey="1"/>
+    <Label value="occupied" background="#e74c3c" hotkey="2"/>
+    <Label value="exclude" background="#95a5a6" hotkey="3"/>
+  </PolygonLabels>
+</View>
