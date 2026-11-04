@@ -1,0 +1,6 @@
+fastapi>=0.115
+uvicorn[standard]>=0.30
+azure-storage-blob>=12.22
+astral>=3.2
+pillow>=10.4
+python-dotenv>=1.0
