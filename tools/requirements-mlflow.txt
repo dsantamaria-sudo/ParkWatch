@@ -1,0 +1,7 @@
+# tools/import_mlflow_history.py: same MLflow client as the pipeline environments
+# (aml/environments/*.conda.yml) plus the Azure ML plugin and SDK.
+mlflow-skinny==2.22.0
+azureml-mlflow==1.60.0
+azure-storage-blob==12.19.0
+azure-ai-ml==1.27.1
+azure-identity==1.23.0
