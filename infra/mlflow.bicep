@@ -22,7 +22,10 @@ param registryName string = 'parkwatchregistry'
 param identityName string = 'parkwatch-mlflow-identity'
 param environmentName string = 'parkwatch-apps'
 param appName string = 'parkwatch-mlflow'
-param image string = 'mlflow-server:3.18.0-3'
+param image string = 'mlflow-server:3.18.0-4'
+
+@description('Migrate the tracking schema on start: only after changing the MLflow version.')
+param mlflowDbUpgrade bool = false
 
 param postgresHost string = 'mlflowtest.postgres.database.azure.com'
 param postgresUser string = 'mlflow'
@@ -204,8 +207,10 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'MLFLOW_FLASK_SERVER_SECRET_KEY', secretRef: 'flask-secret-key' }
             { name: 'ARTIFACTS_DESTINATION', value: 'wasbs://${artifactsContainer}@${storageName}.blob.${environment().suffixes.storage}/' }
             { name: 'AZURE_CLIENT_ID', value: identity.properties.clientId }
-            // One user: a single worker is enough and halves memory and start-up time.
-            { name: 'MLFLOW_WORKERS', value: '1' }
+            // Two workers: a slow UI request does not block the rest (nor the liveness probe).
+            { name: 'MLFLOW_WORKERS', value: '2' }
+            // 'true' only for the first deployment after an MLflow upgrade (schema migration).
+            { name: 'MLFLOW_DB_UPGRADE', value: mlflowDbUpgrade ? 'true' : 'false' }
             // MLflow 3.x rejects requests whose Host header is not listed (DNS rebinding protection).
             { name: 'ALLOWED_HOSTS', value: '${appName}.${appsEnv.properties.defaultDomain},localhost,localhost:*' }
             { name: 'CORS_ALLOWED_ORIGINS', value: 'https://${appName}.${appsEnv.properties.defaultDomain}' }

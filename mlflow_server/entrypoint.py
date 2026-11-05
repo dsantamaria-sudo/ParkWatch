@@ -14,6 +14,8 @@ Secrets arrive as Container App secrets (Key Vault references), never baked into
   MLFLOW_FLASK_SERVER_SECRET_KEY    CSRF key of the basic-auth forms
   AZURE_CLIENT_ID                   user-assigned identity used to write artifacts
   MLFLOW_WORKERS                    uvicorn workers (default 2)
+  MLFLOW_DB_UPGRADE                 "true" migrates the tracking schema before starting; only
+                                    needed after an MLflow upgrade (adds ~10 s to every start)
 
 MLflow reads the last three variables itself.
 """
@@ -38,18 +40,24 @@ def main() -> None:
         "default_permission = READ\n"
         f"database_uri = {pg_uri(os.environ['PG_AUTH_DB']).replace('%', '%%')}\n"
         "admin_username = admin\n"
-        "authorization_function = mlflow.server.auth:authenticate_request_basic_auth\n",
+        "authorization_function = mlflow.server.auth:authenticate_request_basic_auth\n"
+        # Every request re-hashes the password (PBKDF2) unless cached: with the cache off a UI
+        # page, which fires dozens of requests, takes seconds. A changed password may keep
+        # working for up to this TTL.
+        "auth_cache_ttl_seconds = 300\n",
         encoding="utf-8",
     )
     auth_ini.chmod(0o600)
     os.environ["MLFLOW_AUTH_CONFIG_PATH"] = str(auth_ini.resolve())
 
-    # The server refuses a tracking database with an older schema (e.g. after an MLflow
-    # upgrade): migrate first. No-op when the schema is already current.
+    # The server refuses a tracking database with an older schema (after an MLflow upgrade):
+    # deploy once with MLFLOW_DB_UPGRADE=true. Not on every start: it imports MLflow one more
+    # time and slows down every cold start of the scale-to-zero app.
     backend = pg_uri(os.environ["PG_DB"])
-    # No check=True: CalledProcessError would print the command line, password included.
-    if subprocess.run(["mlflow", "db", "upgrade", backend]).returncode != 0:
-        sys.exit("mlflow db upgrade failed (see the traceback above)")
+    if os.getenv("MLFLOW_DB_UPGRADE", "").lower() == "true":
+        # No check=True: CalledProcessError would print the command line, password included.
+        if subprocess.run(["mlflow", "db", "upgrade", backend]).returncode != 0:
+            sys.exit("mlflow db upgrade failed (see the traceback above)")
 
     args = [
         "mlflow", "server",
