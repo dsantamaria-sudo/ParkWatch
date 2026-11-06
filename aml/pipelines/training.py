@@ -36,6 +36,8 @@ WORKSPACE = "parkwatch-workspace"
 LS_URL = "https://park-watch-label-studio.salmonbay-c1ca7758.spaincentral.azurecontainerapps.io"
 LS_PROJECT = 5
 KEYVAULT_URL = "https://parkwatch-keyvault.vault.azure.net"
+# Self-hosted MLflow (infra/mlflow.bicep): train and promote log the training run there.
+MLFLOW_URL = "https://parkwatch-mlflow.proudcliff-6d0c960a.spaincentral.azurecontainerapps.io"
 DATASET_ASSET = "parkwatch-crops"
 ALIGNMENT_ASSET = "parkwatch-alignment"
 # Fixed, whole days chosen by hand (plan.md block 1): a day that goes in never comes out.
@@ -111,14 +113,18 @@ def build_pipeline(client_id: str):
         holdout = {"holdout_days": " ".join(HOLDOUT_DAYS)} if HOLDOUT_DAYS else {}
         fit = train(
             dataset=build.outputs.dataset, run_cv=run_cv,
-            crop_margin=crop_margin, jitter=jitter, width=width, **holdout,
+            crop_margin=crop_margin, jitter=jitter, width=width,
+            mlflow_url=MLFLOW_URL, keyvault_url=KEYVAULT_URL, **holdout,
         )
         fit.compute = "gpu-cluster"
-        fit.environment_variables = {"PYTHONUNBUFFERED": "1"}
+        fit.environment_variables = env  # same identity on both clusters (Key Vault)
         fit.set_limits(timeout=TIMEOUT_TRAIN)
 
-        promote = evaluate_promote(model=fit.outputs.model, dataset=build.outputs.dataset, **holdout)
-        promote.environment_variables = {"PYTHONUNBUFFERED": "1"}
+        promote = evaluate_promote(
+            model=fit.outputs.model, dataset=build.outputs.dataset,
+            mlflow_url=MLFLOW_URL, keyvault_url=KEYVAULT_URL, **holdout,
+        )
+        promote.environment_variables = env
         promote.set_limits(timeout=TIMEOUT_PROMOTE)
 
         condition(check.outputs.changed, true_block=[build, fit, promote])

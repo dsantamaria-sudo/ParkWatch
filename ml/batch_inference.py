@@ -18,7 +18,6 @@ from pathlib import Path
 
 import mlflow
 from azure.storage.blob import BlobServiceClient
-from mlflow import MlflowClient
 from PIL import Image
 
 from alignment import Alignment
@@ -47,7 +46,7 @@ def main() -> None:
 
     rois = json.loads(args.rois.read_text(encoding="utf-8"))
     alignment = Alignment.from_dir(args.alignment)
-    champion = find_champion(MlflowClient())
+    champion = find_champion()
     if champion is None:
         raise SystemExit(f"No champion in {MODEL_NAME}: nothing to predict")
     container = BlobServiceClient(

@@ -4,7 +4,7 @@ name: parkwatch_train
 display_name: train
 description: ParkNet from scratch; day-grouped cross-validation (or epochs of the last run with CV) and final model.
 code: ../../ml
-environment: azureml:parkwatch-train:1
+environment: azureml:parkwatch-train:2
 inputs:
   dataset:
     type: uri_folder
@@ -30,6 +30,12 @@ inputs:
   jitter:
     type: number
     default: 0.0
+  mlflow_url:
+    type: string
+    optional: true  # self-hosted MLflow; no value = the job's Azure ML run
+  keyvault_url:
+    type: string
+    optional: true  # Key Vault with the pipeline user's password (with mlflow_url)
 outputs:
   model:
     type: uri_folder
@@ -40,3 +46,4 @@ command: >-
   --width ${{inputs.width}} --input-size ${{inputs.input_size}}
   --crop-margin ${{inputs.crop_margin}} --jitter ${{inputs.jitter}}
   $[[--holdout-days ${{inputs.holdout_days}}]]
+  $[[--mlflow-url ${{inputs.mlflow_url}}]] $[[--keyvault-url ${{inputs.keyvault_url}}]]

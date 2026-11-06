@@ -77,7 +77,7 @@ def main() -> None:
         with tracking.azureml():
             check(mlflow.get_tracking_uri() == tracking.AZUREML_URI, "azureml(): global URI on the workspace")
             check("MLFLOW_TRACKING_PASSWORD" not in os.environ, "azureml(): basic-auth credentials hidden")
-            champion = find_champion(MlflowClient())
+            champion = find_champion()
             check(champion is not None, f"champion found (parknet:{champion.version if champion else '-'})")
             with tempfile.TemporaryDirectory() as tmp:
                 model = download(champion, Path(tmp))

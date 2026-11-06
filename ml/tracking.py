@@ -31,6 +31,7 @@ TAG_AZURE_TRAIN_RUN = "azureml_train_run"
 TAG_AZURE_PROMOTE_RUN = "azureml_promote_run"
 TAG_VERSION = "parknet_version"
 TAG_DECISION = "promotion"
+TAG_SELF_HOSTED_RUN = "self_hosted_run"  # on the Azure ML job run: link to the self-hosted run
 
 
 def run_name(params: dict, start_time_ms: int | None = None) -> str:
@@ -54,9 +55,10 @@ def _wait_until_up(url: str, timeout_s: int = 300) -> bool:
     return False
 
 
-def use_self_hosted(url: str | None, keyvault_url: str | None, experiment: str) -> bool:
-    """Points the global MLflow to the self-hosted server. False (and Azure ML unchanged) if it
-    is not configured or cannot be reached."""
+def use_self_hosted(url: str | None, keyvault_url: str | None, experiment: str | None = None) -> bool:
+    """Points the global MLflow to the self-hosted server (and to `experiment`, if given: promote
+    resumes an existing run instead). False (and Azure ML unchanged) if it is not configured or
+    cannot be reached."""
     import mlflow
 
     if not url:
@@ -78,7 +80,8 @@ def use_self_hosted(url: str | None, keyvault_url: str | None, experiment: str) 
         os.environ.pop("MLFLOW_RUN_ID", None)
         os.environ["MLFLOW_TRACKING_URI"] = url
         mlflow.set_tracking_uri(url)
-        mlflow.set_experiment(experiment)
+        if experiment:
+            mlflow.set_experiment(experiment)
     except Exception as exc:  # noqa: BLE001 - any failure: keep tracking on Azure ML
         for key in ("MLFLOW_TRACKING_USERNAME", "MLFLOW_TRACKING_PASSWORD"):
             os.environ.pop(key, None)
@@ -89,7 +92,7 @@ def use_self_hosted(url: str | None, keyvault_url: str | None, experiment: str) 
             mlflow.set_tracking_uri(AZUREML_URI)
         print(f"WARNING tracking: self-hosted MLflow unavailable ({type(exc).__name__}: {exc}); using Azure ML")
         return False
-    print(f"Tracking: {url} (experiment {experiment}, user {PIPELINE_USER})")
+    print(f"Tracking: {url} (experiment {experiment or '-'}, user {PIPELINE_USER})")
     return True
 
 
@@ -113,3 +116,19 @@ def azureml():
         mlflow.set_tracking_uri(previous)
         mlflow.set_registry_uri(previous)
         os.environ.update(saved)
+
+
+def link_azureml_run(run) -> None:
+    """Tags the Azure ML job run with the URL of the self-hosted run (the job page in the studio
+    shows no metrics otherwise). Best effort: a failure only prints a warning."""
+    import mlflow
+    from mlflow import MlflowClient
+
+    if not AZUREML_RUN_ID or run.info.run_id == AZUREML_RUN_ID:
+        return
+    url = f"{mlflow.get_tracking_uri()}/#/experiments/{run.info.experiment_id}/runs/{run.info.run_id}"
+    try:
+        with azureml():
+            MlflowClient().set_tag(AZUREML_RUN_ID, TAG_SELF_HOSTED_RUN, url)
+    except Exception as exc:  # noqa: BLE001
+        print(f"WARNING tracking: could not tag the Azure ML run ({type(exc).__name__}: {exc})")

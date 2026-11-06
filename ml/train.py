@@ -11,11 +11,14 @@ Flow (plan.md, Phase 3):
      per spot and per image quality. Without holdout there is no promotion metric.
 
 Everything is logged to MLflow. Meant for an Azure ML compute cluster: inputs and outputs
-come as arguments, no repo paths; if the job sets MLFLOW_RUN_ID, that run is used.
+come as arguments, no repo paths. With --mlflow-url the run goes to the self-hosted MLflow
+(ml/tracking.py, one run per training, completed later by promote.py); without it, or if
+that server cannot be reached, to the Azure ML job's own run (MLFLOW_RUN_ID), as before.
 
 Usage:
   python train.py --data-dir <dataset> --output-dir outputs
   python train.py --data-dir <dataset> --holdout-days 2026-10-19 2026-10-22 --jitter 0.05
+  python train.py --data-dir <dataset> --mlflow-url https://<app> --keyvault-url https://<vault>
 """
 from __future__ import annotations
 
@@ -36,6 +39,7 @@ from torch.utils.data import DataLoader
 from data import CLASSES, SpotCrops, channel_stats, read_manifest
 from metrics import evaluate
 from parknet import ParkNet, count_parameters
+import tracking
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8")  # Windows console (cp1252) vs MLflow emojis
@@ -70,7 +74,10 @@ def parse_args():
     # analysis by image quality (provisional thresholds on the crop's 0-255 grey level)
     p.add_argument("--dark-thr", type=float, default=50.0)
     p.add_argument("--low-contrast-thr", type=float, default=20.0)
-    p.add_argument("--experiment", default="parkwatch-parknet")
+    # tracking
+    p.add_argument("--experiment", default="parkwatch-training")
+    p.add_argument("--mlflow-url", default=None, help="self-hosted MLflow; none = Azure ML (or local) MLflow")
+    p.add_argument("--keyvault-url", default=None, help="Key Vault with the pipeline user's password")
     args = p.parse_args()
     if args.skip_cv and args.final_epochs is None:
         p.error("--skip-cv requires --final-epochs")
@@ -297,14 +304,20 @@ def main():
 
     import mlflow
 
-    if "MLFLOW_RUN_ID" not in os.environ:  # inside an Azure ML job the run already exists
+    self_hosted = tracking.use_self_hosted(args.mlflow_url, args.keyvault_url, args.experiment)
+    # Inside an Azure ML job tracking to the workspace, the run already exists (MLFLOW_RUN_ID).
+    job_run = "MLFLOW_RUN_ID" in os.environ
+    if not job_run:
         mlflow.set_experiment(args.experiment)
-    with mlflow.start_run(run_name=None if "MLFLOW_RUN_ID" in os.environ else f"parknet_w{args.width}_{args.input_size}px"):
+    with mlflow.start_run(run_name=None if job_run else tracking.run_name(vars(args))) as run:
+        if self_hosted and tracking.AZUREML_RUN_ID:
+            mlflow.set_tag(tracking.TAG_AZURE_TRAIN_RUN, tracking.AZUREML_RUN_ID)
+        tracking.link_azureml_run(run)
         n_params = count_parameters(ParkNet(len(CLASSES), args.width, args.dropout))
         mlflow.log_params(
             {
                 # final_epochs is logged at the end with the value used (MLflow does not allow changing a param)
-                **{k: (str(v) if isinstance(v, Path) else v) for k, v in vars(args).items() if k not in ("holdout_days", "final_epochs")},
+                **{k: (str(v) if isinstance(v, Path) else v) for k, v in vars(args).items() if k not in ("holdout_days", "final_epochs", "mlflow_url", "keyvault_url")},
                 "final_epochs_forced": args.final_epochs or "none",
                 "arch": "parknet",
                 "n_params": n_params,
@@ -384,8 +397,10 @@ def main():
             "rois_version": info["rois_version"],
             "trained_days": dev_days,
             "epochs": best_epochs,
-            # traceability for the model registry (promote.py)
-            "mlflow_run_id": mlflow.active_run().info.run_id,
+            # traceability for the model registry and for promote.py, which completes this run
+            "mlflow_run_id": run.info.run_id,
+            "mlflow_tracking": args.mlflow_url.rstrip("/") if self_hosted else "default",
+            "azureml_run_id": tracking.AZUREML_RUN_ID or "none",
             "dataset_fingerprint": info.get("fingerprint", "none"),
         }
         (model_dir / "model_config.json").write_text(json.dumps(config, indent=2), encoding="utf-8")

@@ -4,7 +4,7 @@ name: parkwatch_promote
 display_name: evaluate_promote
 description: Registers the model in parknet, evaluates new model and champion on the same holdout and promotes if macro F1 >=.
 code: ../../ml
-environment: azureml:parkwatch-train:1
+environment: azureml:parkwatch-train:2
 inputs:
   model:
     type: uri_folder
@@ -14,7 +14,14 @@ inputs:
   holdout_days:
     type: string
     optional: true
+  mlflow_url:
+    type: string
+    optional: true  # self-hosted MLflow; no value = the job's Azure ML run
+  keyvault_url:
+    type: string
+    optional: true  # Key Vault with the pipeline user's password (with mlflow_url)
 command: >-
   python promote.py
   --model ${{inputs.model}} --data-dir ${{inputs.dataset}}
   $[[--holdout-days ${{inputs.holdout_days}}]]
+  $[[--mlflow-url ${{inputs.mlflow_url}}]] $[[--keyvault-url ${{inputs.keyvault_url}}]]
