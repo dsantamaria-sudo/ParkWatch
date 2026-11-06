@@ -174,9 +174,11 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
         {
           name: 'mlflow'
           image: '${registry.properties.loginServer}/${image}'
+          // 1 CPU / 2 GiB was OOM-killed under UI load (parent + 2 workers of MLflow 3.x), and every
+          // kill meant minutes of crash-loop back-off. 2 CPU / 4 GiB is the next valid combination.
           resources: {
-            cpu: json('1.0')
-            memory: '2Gi'
+            cpu: json('2.0')
+            memory: '4Gi'
           }
           // MLflow 3.x needs ~40 s to migrate and import before it listens on 5000: the default
           // startup probe killed it in a loop. /health is exempt from auth and host validation.
@@ -209,6 +211,9 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'AZURE_CLIENT_ID', value: identity.properties.clientId }
             // Two workers: a slow UI request does not block the rest (nor the liveness probe).
             { name: 'MLFLOW_WORKERS', value: '2' }
+            // MLflow 3.x starts a job runner by default (one more process with MLflow loaded, plus
+            // a queue in /dev/shm) for GenAI features this server does not use.
+            { name: 'MLFLOW_SERVER_ENABLE_JOB_EXECUTION', value: 'false' }
             // 'true' only for the first deployment after an MLflow upgrade (schema migration).
             { name: 'MLFLOW_DB_UPGRADE', value: mlflowDbUpgrade ? 'true' : 'false' }
             // MLflow 3.x rejects requests whose Host header is not listed (DNS rebinding protection).
