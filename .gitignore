@@ -27,3 +27,4 @@ labelstudio.yaml
 data/
 mlruns/
 mlflow.db
+label_studio/landmarks.png

@@ -1,0 +1,36 @@
+<!--
+  ParkWatch - camera landmarks (project parkwatch-landmarks).
+  One task per photo. Click every landmark you can see with ITS label (lm1 is always the
+  same physical point). On the reference photo of rois.json this defines the landmarks; on
+  any other photo it is an anchor: the exact camera position for that photo.
+  Good landmarks: unique, sharp and fixed (building corners, lamp post tops, a manhole cover,
+  the end of a painted line), spread over the whole image, and some next to EVERY spot (the
+  fisheye lens moves each part of the image differently). Not one of a
+  row of identical windows. Converted with tools/landmarks_from_ls.py.
+-->
+<View>
+  <Header value="Click each landmark with its label (lm1 = always the same point; see label_studio/landmarks.png)."/>
+  <Image name="image" value="$image" zoom="true" zoomControl="true"/>
+  <KeyPointLabels name="landmark" toName="image" strokeWidth="2" smart="false">
+    <Label value="lm1" background="#e6194b" hotkey="1"/>
+    <Label value="lm2" background="#3cb44b" hotkey="2"/>
+    <Label value="lm3" background="#ffe119" hotkey="3"/>
+    <Label value="lm4" background="#4363d8" hotkey="4"/>
+    <Label value="lm5" background="#f58231" hotkey="5"/>
+    <Label value="lm6" background="#911eb4" hotkey="6"/>
+    <Label value="lm7" background="#46f0f0" hotkey="7"/>
+    <Label value="lm8" background="#f032e6" hotkey="8"/>
+    <Label value="lm9" background="#bcf60c" hotkey="9"/>
+    <Label value="lm10" background="#fabebe" hotkey="0"/>
+    <Label value="lm11" background="#008080"/>
+    <Label value="lm12" background="#e6beff"/>
+    <Label value="lm13" background="#9a6324"/>
+    <Label value="lm14" background="#800000"/>
+    <Label value="lm15" background="#aaffc3"/>
+    <Label value="lm16" background="#808000"/>
+    <Label value="lm17" background="#ffd8b1"/>
+    <Label value="lm18" background="#000075"/>
+    <Label value="lm19" background="#a9a9a9"/>
+    <Label value="lm20" background="#ffffff"/>
+  </KeyPointLabels>
+</View>
