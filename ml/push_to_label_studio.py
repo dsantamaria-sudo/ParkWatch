@@ -26,10 +26,12 @@ from ls_client import (FROM_NAME, get_prediction, import_tasks, is_annotated, li
 TO_NAME = "image"  # label_studio/labeling_config.xml
 
 
-def photo_polygons(rois: dict, warp) -> dict[str, list[list[float]]]:
-    """rois.json ROIs (reference geometry) where they fall in this photo; always computed from
-    rois.json, so a task updated on several nights does not accumulate corrections."""
-    return {s["id"]: transform_points(s["points"], tuple(warp), tuple(rois["image_size"])) for s in rois["spots"]}
+def photo_polygons(rois: dict, warps: dict) -> dict[str, list[list[float]]]:
+    """rois.json ROIs (reference geometry) where they fall in this photo, every spot with its own
+    warp ({spot: warp}); always computed from rois.json, so a task updated on several nights does
+    not accumulate corrections."""
+    return {s["id"]: transform_points(s["points"], tuple(warps.get(s["id"], IDENTITY)), tuple(rois["image_size"]))
+            for s in rois["spots"]}
 
 
 def relabel(result: list[dict], spots: dict[str, dict], points: dict[str, list]) -> list[dict]:
@@ -83,7 +85,7 @@ def main() -> None:
     counts = {"updated": 0, "annotated_untouched": 0, "no_prediction": 0, "no_task": 0, "created": 0}
     missing = []
     for blob, spots in pred["predictions"].items():
-        points = photo_polygons(rois, pred.get("warps", {}).get(blob, IDENTITY))
+        points = photo_polygons(rois, pred.get("warps", {}).get(blob, {}))
         task = tasks.get(blob)
         if task is None:
             counts["no_task"] += 1

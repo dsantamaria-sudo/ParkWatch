@@ -1,5 +1,8 @@
 """ParkWatch — camera drift alert: fails if drift.json (align_photos) raises an alert.
 
+The reasons say which photo to anchor (tools/landmark_tasks.py --at ...): a jump of a spot
+between two photos, or the landmarks lost for a long stretch in daylight.
+
 It is a separate step that nothing depends on: its failure marks the pipeline as failed and the
 Azure Monitor alert sends the email, but the rest of the pipeline keeps going (continue_on_step_failure).
 """
@@ -16,8 +19,8 @@ def main() -> None:
     summary = json.loads((args.alignment / "drift.json").read_text(encoding="utf-8"))
     print(json.dumps(summary, indent=2))
     if summary.get("alert"):
-        sys.exit("The camera has moved too much (" + "; ".join(summary["reasons"]) + "): check it")
-    print("Drift within thresholds")
+        sys.exit("Camera drift needs a look:\n  " + "\n  ".join(summary["reasons"]))
+    print("Landmark tracking without jumps or long lost stretches")
 
 
 if __name__ == "__main__":

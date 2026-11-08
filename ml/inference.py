@@ -29,20 +29,21 @@ class ParkNetPredictor:
         self.device = device
 
     @torch.no_grad()
-    def predict(self, image: Image.Image, rois: dict, warp: Warp = IDENTITY) -> dict[str, dict[str, float]]:
+    def predict(self, image: Image.Image, rois: dict, warps: dict[str, Warp] | None = None) -> dict[str, dict[str, float]]:
         """{spot: {class: probability}} for every spot in rois.json.
 
-        `warp`: drift correction of the photo (alignment.py), the same one used in build_dataset."""
+        `warps`: drift correction of every spot ({spot: warp}, alignment.py), the same ones used
+        in build_dataset; a spot without one is not corrected."""
         c = self.config
         if rois["version"] != c["rois_version"]:
             print(f"warning: ROIs {rois['version']} != training ROIs {c['rois_version']}")
-        image = align_image(image.convert("RGB"), warp)
-        batch = torch.stack(
-            [
-                to_tensor_normalized(letterbox(crop_spot(image, s["points"], c["crop_margin"]), c["input_size"]), c["norm_mean"], c["norm_std"])
-                for s in rois["spots"]
-            ]
-        ).to(self.device)
+        image = image.convert("RGB")
+        crops = []
+        for s in rois["spots"]:
+            aligned = align_image(image, (warps or {}).get(s["id"], IDENTITY))  # reference geometry of this spot
+            crops.append(to_tensor_normalized(letterbox(crop_spot(aligned, s["points"], c["crop_margin"]), c["input_size"]),
+                                              c["norm_mean"], c["norm_std"]))
+        batch = torch.stack(crops).to(self.device)
         probs = torch.softmax(self.model(batch), dim=1).cpu().tolist()
         return {s["id"]: dict(zip(c["classes"], p)) for s, p in zip(rois["spots"], probs)}
 

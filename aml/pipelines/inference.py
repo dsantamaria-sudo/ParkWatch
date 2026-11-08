@@ -3,7 +3,7 @@
   align_photos (CPU) -> batch_inference (CPU, champion) -> push_to_label_studio (CPU)
 
 align_photos completes the alignment table with any missing photos (without registering a new
-version: the training pipeline does that) and batch_inference straightens every photo with it.
+version: the training pipeline does that) and batch_inference straightens every spot with it.
 
 Unannotated tasks of the last 3 days (or of --days) get the champion's labels instead of the
 "all occupied" pre-annotation, with each polygon placed over its real spot. Annotated tasks are
@@ -20,8 +20,8 @@ from azure.ai.ml import Input, MLClient, load_component
 from azure.ai.ml.dsl import pipeline
 from azure.identity import DefaultAzureCredential
 
-from training import (COMPONENTS, KEYVAULT_URL, LS_PROJECT, LS_URL, RESOURCE_GROUP, ROIS, STATIC_MASK,
-                      SUBSCRIPTION, WORKSPACE, align_step, cluster_client_id, configure)
+from training import (COMPONENTS, KEYVAULT_URL, LS_PROJECT, LS_URL, RESOURCE_GROUP, ROIS, SUBSCRIPTION,
+                      WORKSPACE, align_step, cluster_client_id, configure)
 
 TIMEOUT_INFERENCE = 30 * 60  # block 4
 
@@ -34,8 +34,8 @@ def build_pipeline(client_id: str, days: list[str]):
     window = {"days": " ".join(days)} if days else {}
 
     @pipeline(name="parkwatch_inference", default_compute="cpu-cluster")
-    def inference(rois: Input, mask: Input, last_days: int = 3, create_missing: bool = False):
-        align = align_step(align_photos, rois, mask, client_id)
+    def inference(rois: Input, last_days: int = 3, create_missing: bool = False):
+        align = align_step(align_photos, rois, client_id)
         predict = batch_inference(rois=rois, alignment=align.outputs.alignment, last_days=last_days, **window)
         predict.environment_variables = env
         predict.set_limits(timeout=TIMEOUT_INFERENCE)
@@ -60,7 +60,6 @@ def main() -> None:
     inference = build_pipeline(cluster_client_id(client, "cpu-cluster"), args.days)
     job = inference(
         rois=Input(type="uri_file", path=str(ROIS)),
-        mask=Input(type="uri_file", path=str(STATIC_MASK)),
         create_missing=args.create_missing,
     )
     job = client.jobs.create_or_update(configure(job, "parkwatch-inference"))

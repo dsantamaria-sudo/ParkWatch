@@ -35,6 +35,7 @@ WORKSPACE = "parkwatch-workspace"
 
 LS_URL = "https://park-watch-label-studio.salmonbay-c1ca7758.spaincentral.azurecontainerapps.io"
 LS_PROJECT = 5
+LANDMARKS_PROJECT = 7  # parkwatch-landmarks: anchors of the camera landmarks (align_photos)
 KEYVAULT_URL = "https://parkwatch-keyvault.vault.azure.net"
 # Self-hosted MLflow (infra/mlflow.bicep): train and promote log the training run there.
 MLFLOW_URL = "https://parkwatch-mlflow.proudcliff-6d0c960a.spaincentral.azurecontainerapps.io"
@@ -54,7 +55,6 @@ TIMEOUT_PROMOTE = 30 * 60
 ROOT = Path(__file__).resolve().parents[2]
 COMPONENTS = ROOT / "aml" / "components"
 ROIS = ROOT / "label_studio" / "rois.json"
-STATIC_MASK = ROOT / "label_studio" / "static_mask.json"
 
 
 def cluster_client_id(client: MLClient, cluster: str) -> str:
@@ -74,8 +74,9 @@ def configure(job, experiment: str):
     return job
 
 
-def align_step(component, rois, mask, client_id: str):
-    align = component(rois=rois, mask=mask, asset_name=ALIGNMENT_ASSET)
+def align_step(component, rois, client_id: str):
+    align = component(rois=rois, ls_url=LS_URL, landmarks_project=LANDMARKS_PROJECT,
+                      keyvault_url=KEYVAULT_URL, asset_name=ALIGNMENT_ASSET)
     align.environment_variables = {"AZURE_CLIENT_ID": client_id, "PYTHONUNBUFFERED": "1"}
     align.set_limits(timeout=TIMEOUT_ALIGN)
     return align
@@ -91,9 +92,9 @@ def build_pipeline(client_id: str):
     env = {"AZURE_CLIENT_ID": client_id, "PYTHONUNBUFFERED": "1"}
 
     @pipeline(name="parkwatch_training", default_compute="cpu-cluster")
-    def training(rois: Input, mask: Input, force: bool = False, run_cv: bool = False,
+    def training(rois: Input, force: bool = False, run_cv: bool = False,
                  crop_margin: float = 0.10, jitter: float = 0.0, width: float = 1.0):
-        align = align_step(align_photos, rois, mask, client_id)
+        align = align_step(align_photos, rois, client_id)
         align.outputs.alignment.name = ALIGNMENT_ASSET  # a new version of the table every night
         alert = drift_alert(alignment=align.outputs.alignment)
         alert.environment_variables = {"PYTHONUNBUFFERED": "1"}
@@ -146,7 +147,6 @@ def main() -> None:
     training = build_pipeline(cluster_client_id(client, "cpu-cluster"))
     job = training(
         rois=Input(type="uri_file", path=str(ROIS)),
-        mask=Input(type="uri_file", path=str(STATIC_MASK)),
         force=args.force,
         run_cv=args.run_cv,
         crop_margin=args.crop_margin,

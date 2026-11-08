@@ -3,7 +3,7 @@
   champion (parknet registry) + Blob photos of the last --last-days UTC days (or --days)
   + alignment table (align_photos): every photo is straightened before cropping
     -> <out>/predictions.json   {blob: {spot: {"label", "score", "probs"}}} + model version
-                                + warps {blob: drift correction} (to move the polygons in Label Studio)
+                                + warps {blob: {spot: drift correction}} (to move the polygons in Label Studio)
 
 Same crop and preprocessing as in training (ParkNetPredictor + model_config.json).
 """
@@ -58,14 +58,15 @@ def main() -> None:
         classes = predictor.config["classes"]
         mlflow.log_params({"model": f"{MODEL_NAME}:{champion.version}", "rois_version": rois["version"]})
         predictions: dict[str, dict] = {}
-        warps: dict[str, list[float]] = {}
+        warps: dict[str, dict[str, list[float]]] = {}
         for day in window(args.last_days, args.days):
             blobs = retry(lambda: sorted(b.name for b in container.list_blobs(name_starts_with=f"{day:%Y/%m/%d}/")
                                          if b.name.endswith(".jpg")), f"list {day}")
             for blob in blobs:
                 data = retry(lambda: container.download_blob(blob).readall(), blob)
-                warps[blob] = list(alignment.warp(blob))
-                probs = predictor.predict(Image.open(io.BytesIO(data)), rois, tuple(warps[blob]))
+                spot_warps = alignment.warps(blob)
+                warps[blob] = {spot: list(w) for spot, w in spot_warps.items()}
+                probs = predictor.predict(Image.open(io.BytesIO(data)), rois, spot_warps)
                 predictions[blob] = {
                     spot: {"label": max(pr, key=pr.get), "score": round(max(pr.values()), 4),
                            "probs": {c: round(pr[c], 4) for c in classes}}

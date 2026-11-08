@@ -1,38 +1,27 @@
-"""ParkWatch — experiment: automatic tracking of the landmarks over a range of days.
+"""ParkWatch — local run of the landmark tracking (ml/landmarks.py) over a range of days.
 
-Every landmark (label_studio/landmarks.json) is searched in each photo, in time order, near
-where it was in the previous photo (the camera moves little in 3 minutes, and hardly at
-night: each day starts where the previous one ended): normalised cross-correlation of a
-patch around the landmark, cut from a TEMPLATE photo, the anchor nearest in time (or the
-reference). A match is accepted if it is good and it agrees with the rigid movement
-(rotation + shift) of the others since the previous photo. A landmark not found is moved with
-that same movement, so every spot always keeps its landmarks around it; after MISSED_WIDE
-photos without it, it is searched in a wider radius. With fewer than MIN_LANDMARKS matches the photo is LOST: the positions
-of the last tracked photo are kept and it is reported (in the pipeline: ask for an anchor).
+The same tracking align_photos.py runs in the pipeline, here with the anchors of
+label_studio/landmarks.json (tools/landmarks_from_ls.py) and the photos read with the
+connection string, to analyse it: every day starts where the previous one ended, the
+reference photo counts as an anchor, and on every anchor the tracking is first compared with
+the clicks (validation) and then reset to them.
 
-The reference photo of rois.json counts as an anchor. On an anchor photo the tracking is first compared with the clicks (validation) and then the
-positions are reset to the clicks (as the pipeline will do).
-
-Every spot gets its own shift from the landmarks around it (local similarity, fisheye lens).
-
-Output in data/landmarks/<day>/ (outside git): tracking.csv (one row per photo: landmarks
-found, mean match score, shift of every spot) and, with --preview, every photo drawn with the
-moved spots (green; red: current alignment table with --table) plus index.html to browse
-them (local only: the photos never leave the machine).
-
-With --video it writes the same frames, for the whole range, into a timelapse MP4
-(data/landmarks/timelapse_<start>_<end>.mp4).
+Output in data/landmarks/<day>/ (outside git): tracking.csv (one row per photo: status,
+landmarks found, mean match score, shift of every spot) and, with --preview, every photo drawn
+with the moved spots (green; red: current alignment table with --table) plus index.html to
+browse them; with --video, the same frames for the whole range in a timelapse MP4
+(data/landmarks/timelapse_<start>_<end>.mp4). Local only: the photos never leave the machine.
 
 Usage (repo root; AZURE_STORAGE_CONNECTION_STRING in tools/.env):
-  uv run python tools/landmark_tracking.py --start 2026-10-16 --end 2026-11-06
-  uv run python tools/landmark_tracking.py --start 2026-10-16 --end 2026-11-07 --video --table
+  uv run python tools/landmark_tracking.py --start 2026-10-16 --end 2026-11-07
   uv run python tools/landmark_tracking.py --start 2026-11-06 --preview --table
+  uv run python tools/landmark_tracking.py --start 2026-10-16 --end 2026-11-07 --video
 """
 from __future__ import annotations
 
 import argparse
-import bisect
 import csv
+import io
 import json
 import os
 import sys
@@ -47,114 +36,32 @@ from dotenv import load_dotenv
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "ml"))
-sys.path.insert(0, str(ROOT / "tools"))
-from align_photos import gray  # noqa: E402  (same CLAHE as the pipeline)
-from alignment import blob_time  # noqa: E402
-from landmarks_from_ls import apply, fit_rigid, local_warp  # noqa: E402
-
-PATCH = 40          # half size of the template patch (81x81 px)
-RADIUS = 40         # search radius around the previous position (px)
-RADIUS_LOST = 120   # wider search after a lost photo
-MIN_SCORE = 0.5     # normalised cross-correlation
-MAX_DISAGREE = 8    # px: a match further than this from the rigid movement of the others is rejected
-SPREAD_ROTATION = 400  # px: the rotation between photos is only estimated from matches this spread out
-MISSED_WIDE = 3     # photos without a landmark before searching it in RADIUS_LOST
-MIN_LANDMARKS = 3
+from alignment import Alignment  # noqa: E402
+from landmarks import Tracker, apply, local_warp, spot_centres, spot_warps, to_px  # noqa: E402
 
 
-def to_px(points: dict, size) -> dict[str, np.ndarray]:
-    w, h = size
-    return {k: np.array([x / 100 * w, y / 100 * h]) for k, (x, y) in points.items()}
-
-
-def find(image: np.ndarray, patch: np.ndarray, around: np.ndarray, radius: int) -> tuple[np.ndarray, float] | None:
-    h, w = image.shape
-    x0, y0 = int(around[0]) - PATCH - radius, int(around[1]) - PATCH - radius
-    x1, y1 = int(around[0]) + PATCH + radius + 1, int(around[1]) + PATCH + radius + 1
-    if x0 < 0 or y0 < 0 or x1 > w or y1 > h:
-        return None
-    res = cv2.matchTemplate(image[y0:y1, x0:x1], patch, cv2.TM_CCOEFF_NORMED)
-    _, score, _, (mx, my) = cv2.minMaxLoc(res)
-    return np.array([x0 + mx + PATCH, y0 + my + PATCH], float), float(score)
-
-
-def movement(src: np.ndarray, dst: np.ndarray) -> tuple[tuple, np.ndarray]:
-    """Rigid movement between two photos. With matches close together (e.g. only the cluster at
-    the base of the building) the rotation is unreliable and swings the far landmarks: then only
-    the shift (median) is used; in 3 minutes the camera hardly rotates."""
-    spread = np.hypot(*(src[:, None] - src[None]).transpose(2, 0, 1)).max()
-    if spread >= SPREAD_ROTATION:
-        return fit_rigid(src, dst)
-    tx, ty = np.median(dst - src, axis=0)
-    warp = (1.0, 0.0, float(tx), 0.0, 1.0, float(ty))
-    return warp, np.hypot(*(apply(warp, src) - dst).T)
-
-
-def coherent(previous: dict, found: dict) -> tuple[dict, tuple | None]:
-    """Matches consistent with one rigid movement since the previous photo: the worst one is
-    dropped while it is further than MAX_DISAGREE. Returns them and the movement."""
-    keys = list(found)
-    while len(keys) >= MIN_LANDMARKS:
-        warp, residuals = movement(np.array([previous[k] for k in keys]), np.array([found[k] for k in keys]))
-        worst = int(np.argmax(residuals))
-        if residuals[worst] <= MAX_DISAGREE:
-            return {k: found[k] for k in keys}, warp
-        keys.pop(worst)
-    return {}, None
-
-
-def spot_error(ref: dict, tracked: dict, clicked: dict, centres: dict) -> dict[str, float]:
-    """Distance between the spot centres moved with the tracking and with the clicks."""
-    src_t, dst_t = np.array([ref[k] for k in tracked]), np.array(list(tracked.values()))
-    keys = [k for k in clicked if k in ref]
-    src_c, dst_c = np.array([ref[k] for k in keys]), np.array([clicked[k] for k in keys])
-    return {sid: float(np.hypot(*(apply(local_warp(src_t, dst_t, c[0]), c)[0]
-                                  - apply(local_warp(src_c, dst_c, c[0]), c)[0])))
-            for sid, c in centres.items()}
-
-
-class Templates:
-    """Patches of every landmark cut from the anchor nearest in time to the photo."""
-
-    def __init__(self, container, ref: dict, sources: dict[str, dict]):
-        self.container, self.ref, self.sources = container, ref, sources
-        self.times = sorted((blob_time(b), b) for b in sources)
-        self.cache: dict[str, dict] = {}
-
-    def nearest(self, blob: str) -> str:
-        t = blob_time(blob)
-        i = bisect.bisect_left(self.times, (t, ""))
-        return min((self.times[j] for j in (i - 1, i) if 0 <= j < len(self.times)), key=lambda x: abs(x[0] - t))[1]
-
-    def patches(self, blob: str) -> dict[str, np.ndarray]:
-        source = self.nearest(blob)
-        if source not in self.cache:
-            image = gray(self.container.download_blob(source).readall())
-            out = {}
-            for k, (x, y) in self.sources[source].items():
-                patch = image[int(y) - PATCH:int(y) + PATCH + 1, int(x) - PATCH:int(x) + PATCH + 1]
-                if k in self.ref and patch.shape == (2 * PATCH + 1, 2 * PATCH + 1):
-                    out[k] = patch
-            self.cache = {source: out}  # one template in memory at a time
-            print(f"  template: {source} ({len(out)} landmarks)")
-        return self.cache[source]
-
-
-def load_table():
-    import io
-
-    from alignment import Alignment
+def load_table() -> Alignment | None:
     from azure_utils import latest_asset_file
 
     os.environ.setdefault("AZUREML_ARM_SUBSCRIPTION", "48ee8f92-9a0c-4ecd-b6ce-83845f85bf75")
     os.environ.setdefault("AZUREML_ARM_RESOURCEGROUP", "parkwatch")
     os.environ.setdefault("AZUREML_ARM_WORKSPACE_NAME", "parkwatch-workspace")
     content, version = latest_asset_file("parkwatch-alignment", "alignment.csv")
+    rows = list(csv.DictReader(io.StringIO(content.decode("utf-8"))))
+    if rows and "status" not in rows[0]:
+        print(f"parkwatch-alignment:{version} is the old table (one warp per photo): not drawn")
+        return None
     print(f"Current table: parkwatch-alignment:{version}")
-    return Alignment(list(csv.DictReader(io.StringIO(content.decode("utf-8")))))
+    return Alignment(rows)
 
 
-def draw(image, rois, ref, positions, found, size, table_warp, title, path, width: int = 960):
+def spot_error(ref: dict, tracked: dict, clicked: dict, centres: dict) -> dict[str, float]:
+    """Distance between the spot centres moved with the tracking and with the clicks."""
+    a, b = spot_warps(ref, tracked, centres), spot_warps(ref, clicked, centres)
+    return {s: float(np.hypot(*(apply(a[s], c[None])[0] - apply(b[s], c[None])[0]))) for s, c in centres.items()}
+
+
+def draw(image, rois, ref, positions, found, size, table_warps, title, path, width: int = 960):
     """Spots moved with the local model (green) and with the current table (red); landmarks found
     (yellow) or carried with the common movement (grey)."""
     w, h = size
@@ -162,8 +69,8 @@ def draw(image, rois, ref, positions, found, size, table_warp, title, path, widt
     dst = np.array(list(positions.values()))
     for spot in rois["spots"]:
         pts = np.array([[x / 100 * w, y / 100 * h] for x, y in spot["points"]])
-        if table_warp is not None:
-            cv2.polylines(image, [apply(table_warp, pts).astype(np.int32)], True, (60, 60, 230), 2)
+        if table_warps and spot["id"] in table_warps:
+            cv2.polylines(image, [apply(table_warps[spot["id"]], pts).astype(np.int32)], True, (60, 60, 230), 2)
         moved = apply(local_warp(src, dst, pts.mean(axis=0)), pts)
         cv2.polylines(image, [moved.astype(np.int32)], True, (60, 220, 60), 3)
         cx, cy = moved.mean(axis=0).astype(int)
@@ -214,7 +121,7 @@ def main() -> None:
     p.add_argument("--end", type=date.fromisoformat, default=None, help="last day (default: --start)")
     p.add_argument("--out", type=Path, default=ROOT / "data" / "landmarks")
     p.add_argument("--preview", action="store_true", help="draw the spots on every photo + index.html per day")
-    p.add_argument("--table", action="store_true", help="with --preview: also the current alignment table (red, az login)")
+    p.add_argument("--table", action="store_true", help="with --preview/--video: also the alignment table (red, az login)")
     p.add_argument("--video", action="store_true", help="timelapse MP4 of the whole range (data/landmarks/)")
     p.add_argument("--fps", type=int, default=15, help="timelapse frames per second")
     p.add_argument("--verbose", action="store_true", help="print one line every 10 photos")
@@ -230,25 +137,16 @@ def main() -> None:
     anchors[lm["source_image"]] = ref  # the reference photo is an anchor too
     container = BlobServiceClient.from_connection_string(os.environ["AZURE_STORAGE_CONNECTION_STRING"]) \
         .get_container_client(os.getenv("PW_CONTAINER", "raw"))
-    templates = Templates(container, ref, anchors)
-    table = load_table() if args.preview and args.table else None
-    centres = {s["id"]: np.array([[sum(x for x, _ in s["points"]) / len(s["points"]) / 100 * size[0],
-                                   sum(y for _, y in s["points"]) / len(s["points"]) / 100 * size[1]]])
-               for s in rois["spots"]}
-
-    # start: positions of the anchor (or reference) nearest in time to the first day
-    first = f"{args.start:%Y/%m/%d}/parkwatch_{args.start:%Y%m%d}T120000Z.jpg"
-    start_source = templates.nearest(first)
-    start_pos = templates.sources[start_source]
-    offset = np.median(np.array([start_pos[k] - ref[k] for k in start_pos]), axis=0)
-    last = {k: start_pos.get(k, ref[k] + offset) for k in ref}  # landmarks not clicked there: common offset
-    print(f"Start positions: {start_source}")
-
-    lost, streak, prev_blob = False, None, ""
-    video, video_path = None, args.out / f"timelapse_{args.start}_{end}.mp4"
-    missed = {k: 0 for k in ref}
-    streaks, validation = [], []
     download = lambda b: container.download_blob(b).readall()  # noqa: E731
+    tracker = Tracker(ref, anchors, download)
+    tracker.start(near=f"x/parkwatch_{args.start:%Y%m%d}T120000Z.jpg")
+    print(f"Start positions: {tracker.nearest_anchor(f'x/parkwatch_{args.start:%Y%m%d}T120000Z.jpg')}")
+    table = load_table() if (args.preview or args.video) and args.table else None
+    centres = spot_centres(rois, size)
+
+    streak, prev_blob = None, ""
+    streaks, validation = [], []
+    video, video_path = None, args.out / f"timelapse_{args.start}_{end}.mp4"
     day = args.start
     while day <= end:
         prefix = f"{day:%Y/%m/%d}/"
@@ -260,58 +158,35 @@ def main() -> None:
         rows, frames = [], []
         with ThreadPoolExecutor(8) as pool:  # downloads ahead, in order
             for i, (blob, data) in enumerate(zip(blobs, pool.map(download, blobs))):
-                image = gray(data)
-                patches = templates.patches(blob)
-                found, scores = {}, []
-                for k, patch in patches.items():
-                    if k not in last:
-                        continue
-                    hit = find(image, patch, last[k], RADIUS_LOST if lost or missed[k] >= MISSED_WIDE else RADIUS)
-                    if hit and hit[1] >= MIN_SCORE:
-                        found[k] = hit[0]
-                        scores.append(hit[1])
-                found, motion = coherent(last, found)
-                if len(found) >= MIN_LANDMARKS:
-                    if lost and streak:
-                        streaks.append({**streak, "last": prev_blob})
-                        streak = None
-                    lost = False
-                    last = {k: found[k] if k in found else apply(motion, last[k][None])[0] for k in last}
-                    missed = {k: 0 if k in found else missed[k] + 1 for k in missed}
-                else:
-                    if not lost:
-                        streak = {"first": blob, "n": 0}
-                    lost = True
+                result = tracker.step(blob, data)
+                lost = result["status"] == "lost"
+                if lost:
+                    streak = streak or {"first": blob, "n": 0}
                     streak["n"] += 1
-                if blob in anchors:  # validation, then reset to the clicks
-                    clicked = anchors[blob]
-                    if lost:
+                elif streak:
+                    streaks.append({**streak, "last": prev_blob})
+                    streak = None
+                if result["status"] == "anchor":
+                    before, clicked = result["before_anchor"], anchors[blob]
+                    if before is None:
                         validation.append((blob, None, None))
                     else:
-                        errors = [np.hypot(*(last[k] - clicked[k])) for k in clicked if k in last]
-                        validation.append((blob, float(np.mean(errors)), spot_error(ref, last, clicked, centres)))
-                    common = [k for k in clicked if k in last]
-                    motion, _ = fit_rigid(np.array([last[k] for k in common]), np.array([clicked[k] for k in common]))
-                    last = {k: clicked[k] if k in clicked else apply(motion, last[k][None])[0] for k in last}
-                    missed = {k: 0 for k in missed}
-                    if lost and streak:
-                        streaks.append({**streak, "last": blob})
-                        streak = None
-                    lost = False
+                        err = float(np.mean([np.hypot(*(before[k] - clicked[k])) for k in clicked]))
+                        validation.append((blob, err, spot_error(ref, before, clicked, centres)))
                 prev_blob = blob
 
+                positions, found = tracker.positions, set(result["found"])
                 hhmmss = blob.rsplit("T", 1)[1][:6]
-                row = {"blob": blob, "n_found": len(found), "lost": int(lost),
-                       "score": round(float(np.mean(scores)) if scores else 0.0, 3)}
-                src, dst = np.array([ref[k] for k in last]), np.array(list(last.values()))
-                for sid, c in centres.items():
-                    sh = apply(local_warp(src, dst, c[0]), c)[0] - c[0]
+                row = {"blob": blob, "status": result["status"], "n_found": len(found), "lost": int(lost),
+                       "score": round(result["score"], 3)}
+                for sid, w in spot_warps(ref, positions, centres).items():
+                    sh = apply(w, centres[sid][None])[0] - centres[sid]
                     row[f"{sid}_dx"], row[f"{sid}_dy"] = round(float(sh[0]), 1), round(float(sh[1]), 1)
                 rows.append(row)
                 if args.preview or args.video:
                     name = f"{hhmmss}.jpg"
-                    frame = draw(cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR), rois, ref, last, found,
-                                 size, table.warp(blob) if table and blob in table.rows else None,
+                    frame = draw(cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR), rois, ref, positions,
+                                 found, size, table.warps(blob) if table and blob in table.rows else None,
                                  f"{day} {hhmmss[:2]}:{hhmmss[2:4]} UTC  {len(found)} landmarks found"
                                  + ("  LOST: positions of the last tracked photo" if lost else ""),
                                  out_dir / "preview" / name if args.preview else None)
@@ -341,7 +216,7 @@ def main() -> None:
         else:
             print(f"{day}: no photos")
         day += timedelta(days=1)
-    if lost and streak:
+    if streak:
         streaks.append({**streak, "last": prev_blob})
     if video is not None:
         video.release()

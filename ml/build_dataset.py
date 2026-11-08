@@ -37,7 +37,7 @@ from PIL import Image
 
 from azure_utils import credential, retry
 from crops import STORE_MARGIN, clip_box, expand_box, polygon_bbox
-from alignment import Alignment, align_image, describe
+from alignment import IDENTITY, Alignment, align_image, describe
 from ls_client import latest_labels
 
 CLASSES = ("free", "occupied")
@@ -48,7 +48,7 @@ COLUMNS = [
     "brightness", "contrast",  # mean and std of grey level (0-255) of the evaluation crop
     "episode_id", "episode_len", "episode_min",
     "rois_version",
-    "align_dx", "align_dy", "align_angle",  # drift correction applied to the photo (alignment.py)
+    "align_dx", "align_dy", "align_angle",  # drift correction applied to this spot (alignment.py)
 ]
 
 
@@ -143,15 +143,17 @@ def main() -> None:
             skipped["all_exclude"] += 1
             continue
 
-        warp = alignment.warp(blob)
-        image = align_image(cached_image(container, blob, cache), warp)  # reference geometry
-        drift = describe(warp)
-        W, H = image.size
+        photo = cached_image(container, blob, cache)
+        warps = alignment.warps(blob)  # one per spot: the fisheye moves every part of the image differently
+        W, H = photo.size
         for spot in rois["spots"]:
             label = labels.get(spot["id"])
             if label not in CLASSES:
                 skipped[f"spot_{label or 'no_region'}"] += 1
                 continue
+            warp = warps.get(spot["id"], IDENTITY)
+            image = align_image(photo, warp)  # reference geometry of this spot
+            drift = describe(warp)
             bbox = polygon_bbox(spot["points"], W, H)
             sx0, sy0, sx1, sy1 = clip_box(expand_box(bbox, STORE_MARGIN), W, H)
             stored = image.crop((sx0, sy0, sx1, sy1))

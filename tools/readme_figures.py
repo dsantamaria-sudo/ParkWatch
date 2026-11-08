@@ -1,10 +1,10 @@
 """ParkWatch — README figure (docs/images/alignment_before_after.png).
 
 Zoom on spots p04-p05 of a photo taken after the camera moved: fixed ROIs on the raw photo |
-after alignment | reference photo. The photo is measured with the same code as the pipeline
-(ml/align_photos.measure) and straightened with ml/alignment.align_image.
+ROIs moved with the landmarks (every spot with its own warp, from the latest alignment table
+written by align_photos) | reference photo.
 
-Usage (repo root; photos are read with the connection string in tools/.env):
+Usage (repo root; photos read with the connection string in tools/.env, the table with az login):
   uv run python tools/readme_figures.py
   uv run python tools/readme_figures.py --photo 2026/11/03/parkwatch_20261103T155920Z.jpg
 """
@@ -26,19 +26,20 @@ from dotenv import load_dotenv  # noqa: E402
 from PIL import Image, ImageDraw  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ml"))
-from align_photos import gray, measure, static_mask  # noqa: E402
-from alignment import align_image, describe  # noqa: E402
+from alignment import Alignment, describe, transform_points  # noqa: E402
 
 COLORS = {"raw": "#e74c3c", "aligned": "#2ecc71", "reference": "#f1c40f"}
 
 
-def draw_rois(image: Image.Image, rois: dict, color: str, ids: list[str], width: int = 5) -> Image.Image:
+def draw_rois(image: Image.Image, rois: dict, color: str, ids: list[str], width: int = 5,
+              warps: dict | None = None) -> Image.Image:
     out = image.copy()
     d = ImageDraw.Draw(out)
     w, h = out.size
     for spot in rois["spots"]:
         if spot["id"] in ids:
-            pts = [(x / 100 * w, y / 100 * h) for x, y in spot["points"]]
+            points = spot["points"] if not warps else transform_points(spot["points"], warps[spot["id"]], (w, h))
+            pts = [(x / 100 * w, y / 100 * h) for x, y in points]
             d.line(pts + [pts[0]], fill=color, width=width, joint="curve")
     return out
 
@@ -70,7 +71,6 @@ def panels(images: list[Image.Image], titles: list[str], colors: list[str], path
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--rois", type=Path, default=Path("label_studio/rois.json"))
-    p.add_argument("--mask", type=Path, default=Path("label_studio/static_mask.json"))
     p.add_argument("--photo", default="2026/11/03/parkwatch_20261103T155920Z.jpg", help="example photo (after the camera fell)")
     p.add_argument("--zoom", default="p04,p05")
     p.add_argument("--out", type=Path, default=Path("docs/images"))
@@ -87,21 +87,31 @@ def main() -> None:
     photo_bytes = container.download_blob(args.photo).readall()
     reference = Image.open(io.BytesIO(ref_bytes)).convert("RGB")
     photo = Image.open(io.BytesIO(photo_bytes)).convert("RGB")
-    ref_gray = gray(ref_bytes)
-    warp, inliers = measure(ref_gray, gray(photo_bytes), static_mask(args.mask, ref_gray.shape))
-    if warp is None:
-        raise SystemExit(f"no alignment for {args.photo}")
-    warp = tuple(float(v) for v in warp.flatten())
-    aligned = align_image(photo, warp)
-    drift = describe(warp)
-    print(f"{args.photo}: dx {drift['dx']:+.1f} px, dy {drift['dy']:+.1f} px, rotation {drift['angle']:+.2f}°, {inliers} inliers")
+    import csv
 
+    from azure_utils import latest_asset_file
+
+    os.environ.setdefault("AZUREML_ARM_SUBSCRIPTION", "48ee8f92-9a0c-4ecd-b6ce-83845f85bf75")
+    os.environ.setdefault("AZUREML_ARM_RESOURCEGROUP", "parkwatch")
+    os.environ.setdefault("AZUREML_ARM_WORKSPACE_NAME", "parkwatch-workspace")
+    content, _ = latest_asset_file("parkwatch-alignment", "alignment.csv")
+    table = Alignment(list(csv.DictReader(io.StringIO(content.decode("utf-8")))))
+    if args.photo not in table.rows:
+        raise SystemExit(f"{args.photo} is not in the alignment table")
+    warps = table.warps(args.photo)
     ids = args.zoom.split(",")
+    drift = describe(warps[ids[0]])
+    print(f"{args.photo} ({ids[0]}): dx {drift['dx']:+.1f} px, dy {drift['dy']:+.1f} px, rotation {drift['angle']:+.2f}°")
+
     box = zoom_box(rois, ids, reference.size)
+    moved = {"spots": [{"id": sp["id"], "points": transform_points(sp["points"], warps[sp["id"]], photo.size)}
+                       for sp in rois["spots"]]}
+    moved_box = zoom_box(moved, ids, photo.size)  # the moved spots are elsewhere on the raw photo
     panels(
-        [draw_rois(photo, rois, COLORS["raw"], ids).crop(box), draw_rois(aligned, rois, COLORS["aligned"], ids).crop(box),
+        [draw_rois(photo, rois, COLORS["raw"], ids).crop(box),
+         draw_rois(photo, rois, COLORS["aligned"], ids, warps=warps).crop(moved_box),
          draw_rois(reference, rois, COLORS["reference"], ids).crop(box)],
-        ["Fixed ROIs, no alignment", "After alignment", "Reference photo"],
+        ["Fixed ROIs, no alignment", "ROIs moved with the landmarks", "Reference photo"],
         [COLORS["raw"], COLORS["aligned"], COLORS["reference"]],
         args.out / "alignment_before_after.png",
         f"Spots p04–p05 after the camera moved ({drift['dx']:+.0f}, {drift['dy']:+.0f}) px and {drift['angle']:+.1f}°",

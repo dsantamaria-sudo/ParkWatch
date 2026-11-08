@@ -26,7 +26,7 @@ from azure_utils import get_secret, latest_asset_file, write_control_outputs
 from crops import STORE_MARGIN
 from ls_client import export_tasks, latest_labels
 
-FINGERPRINT_FORMAT = 2  # bump when what goes into the fingerprint changes (2: per-photo alignment)
+FINGERPRINT_FORMAT = 3  # bump when what goes into the fingerprint changes (2: per-photo alignment, 3: per-spot)
 
 
 def dataset_fingerprint(tasks: list[dict], rois: dict, quality_margin: float, alignment: Alignment) -> str:
@@ -37,9 +37,10 @@ def dataset_fingerprint(tasks: list[dict], rois: dict, quality_margin: float, al
         found = latest_labels(task, spot_ids) if blob else None
         if found:
             labels.extend([blob, spot, label] for spot, label in found.items())
-            m00, m01, m02, m10, m11, m12 = alignment.warp(blob)
-            warps[blob] = [round(m00, 4), round(m01, 4), round(m02 * 2) / 2,
-                           round(m10, 4), round(m11, 4), round(m12 * 2) / 2]
+            # rounded (0.5 px shift) so that tiny numeric noise does not rebuild the dataset
+            warps[blob] = {spot: [round(m00, 4), round(m01, 4), round(m02 * 2) / 2,
+                                  round(m10, 4), round(m11, 4), round(m12 * 2) / 2]
+                           for spot, (m00, m01, m02, m10, m11, m12) in sorted(alignment.warps(blob).items())}
     payload = {
         "format": FINGERPRINT_FORMAT,
         "labels": sorted(labels),

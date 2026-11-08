@@ -4,8 +4,8 @@
   parkwatch-training-weekly   02:00 on Mondays (Sunday night) full cross-validation, forced
   parkwatch-inference         04:00 every day                 champion -> Label Studio, creates new tasks
 
-Each schedule stores a copy of the code, the components, rois.json and static_mask.json as they
-were when it was created: after changing any of them, run this script again to update them.
+Each schedule stores a copy of the code, the components and rois.json as they were when it was
+created (the landmark anchors are read from Label Studio every night): after changing any of them, run this script again to update them.
 
 Usage (from the repo root, with az login):
   uv run python aml/pipelines/schedules.py            # creates or updates the three schedules
@@ -27,14 +27,13 @@ MADRID = TimeZone.ROMANCE_STANDARD_TIME
 def schedules(client: MLClient) -> list[JobSchedule]:
     client_id = training.cluster_client_id(client, "cpu-cluster")
     rois = Input(type="uri_file", path=str(training.ROIS))
-    mask = Input(type="uri_file", path=str(training.STATIC_MASK))
 
     def training_job(force: bool, run_cv: bool):
-        job = training.build_pipeline(client_id)(rois=rois, mask=mask, force=force, run_cv=run_cv)
+        job = training.build_pipeline(client_id)(rois=rois, force=force, run_cv=run_cv)
         return training.configure(job, "parkwatch-training")
 
     infer = training.configure(
-        inference.build_pipeline(client_id, days=[])(rois=rois, mask=mask, create_missing=True),
+        inference.build_pipeline(client_id, days=[])(rois=rois, create_missing=True),
         "parkwatch-inference",
     )
 
