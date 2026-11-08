@@ -50,6 +50,10 @@ def parse_args():
     p.add_argument("--data-dir", type=Path, required=True)
     p.add_argument("--output-dir", type=Path, default=Path("outputs"))
     p.add_argument("--holdout-days", nargs="*", default=[], help="YYYY-MM-DD; empty = no holdout yet")
+    p.add_argument("--holdout-eval", default="true",
+                   help="false = the holdout days are kept out of training but not evaluated (experiments: "
+                        "they are compared on the cross-validation, the holdout is only used to promote)")
+    p.add_argument("--note", default="", help="experiment name: MLflow tag `experiment` and suffix of the run name")
     p.add_argument("--folds", type=int, default=4)
     # model
     p.add_argument("--width", type=float, default=1.0, help="filter multiplier (1.0 = 32/64/128/128)")
@@ -82,6 +86,11 @@ def parse_args():
     if args.skip_cv and args.final_epochs is None:
         p.error("--skip-cv requires --final-epochs")
     return args
+
+
+def is_false(value: str) -> bool:
+    """Boolean flags from Azure ML: a literal may arrive as False/false/0."""
+    return str(value).strip().lower() in ("false", "0", "no")
 
 
 def seed_everything(seed: int) -> None:
@@ -309,7 +318,10 @@ def main():
     job_run = "MLFLOW_RUN_ID" in os.environ
     if not job_run:
         mlflow.set_experiment(args.experiment)
-    with mlflow.start_run(run_name=None if job_run else tracking.run_name(vars(args))) as run:
+    name = tracking.run_name(vars(args)) + (f"_{args.note}" if args.note else "")
+    with mlflow.start_run(run_name=None if job_run else name) as run:
+        if args.note:
+            mlflow.set_tag("experiment", args.note)
         if self_hosted and tracking.AZUREML_RUN_ID:
             mlflow.set_tag(tracking.TAG_AZURE_TRAIN_RUN, tracking.AZUREML_RUN_ID)
         tracking.link_azureml_run(run)
@@ -337,7 +349,7 @@ def main():
 
         # 1-3. Day-grouped cross-validation -> number of epochs
         last_cv = None
-        if not args.skip_cv and args.run_cv.lower() == "false":
+        if not args.skip_cv and is_false(args.run_cv):
             last_cv = epochs_from_last_cv(mlflow)
             if last_cv is None:
                 print("No previous runs with cross-validation: running CV")
@@ -369,7 +381,9 @@ def main():
             mlflow.log_metric("final/loss_train", loss, step=epoch)
 
         # 5. Holdout (if any)
-        if holdout:
+        if holdout and is_false(args.holdout_eval):
+            print(f"Holdout ({len(holdout)} crops) kept out but not evaluated (experiment: compare on the CV)")
+        elif holdout:
             ho_ds = trainer.dataset(holdout, mean, std, train=False)
             m = trainer.evaluate(model, trainer.loader(ho_ds, shuffle=False), ho_ds)
             mlflow.log_metrics(flat_metrics("holdout", m))

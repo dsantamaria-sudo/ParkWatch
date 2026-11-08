@@ -15,6 +15,12 @@ inputs:
   holdout_days:
     type: string
     optional: true  # "YYYY-MM-DD YYYY-MM-DD"; no value = no holdout yet
+  holdout_eval:
+    type: boolean
+    default: true  # false (experiments): holdout kept out of training but not evaluated
+  note:
+    type: string
+    optional: true  # experiment name (MLflow tag `experiment`, run name suffix)
   epochs:
     type: integer
     default: 40
@@ -45,5 +51,6 @@ command: >-
   --run-cv ${{inputs.run_cv}} --epochs ${{inputs.epochs}}
   --width ${{inputs.width}} --input-size ${{inputs.input_size}}
   --crop-margin ${{inputs.crop_margin}} --jitter ${{inputs.jitter}}
-  $[[--holdout-days ${{inputs.holdout_days}}]]
+  $[[--holdout-days ${{inputs.holdout_days}}]] --holdout-eval ${{inputs.holdout_eval}}
+  $[[--note ${{inputs.note}}]]
   $[[--mlflow-url ${{inputs.mlflow_url}}]] $[[--keyvault-url ${{inputs.keyvault_url}}]]

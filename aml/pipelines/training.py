@@ -14,7 +14,12 @@ Usage (from the repo root, with az login):
   uv run python aml/pipelines/training.py                  # epochs of the last run with CV
   uv run python aml/pipelines/training.py --run-cv         # full cross-validation
   uv run python aml/pipelines/training.py --force          # rebuild even if the fingerprint did not change
-  uv run python aml/pipelines/training.py --force --run-cv --crop-margin 0.0   # experiment
+  uv run python aml/pipelines/training.py --experiment crop0 --crop-margin 0.0   # experiment
+
+--experiment NAME: only `train` (GPU), on the latest registered dataset (no rebuild), always with
+cross-validation, holdout kept out of training but NOT evaluated, no registration/promotion.
+Experiments are compared on the cross-validation in MLflow (tag `experiment` = NAME); the
+holdout is only used once, to promote the winner (plan.md, block 8).
 """
 # No `from __future__ import annotations`: @pipeline reads the annotations (Input, bool) as types.
 import argparse
@@ -133,6 +138,25 @@ def build_pipeline(client_id: str):
     return training
 
 
+def build_experiment(client_id: str):
+    """Pipeline of one experiment: train with CV on a fixed dataset, nothing registered."""
+    train = load_component(COMPONENTS / "train.yml")
+
+    @pipeline(name="parkwatch_experiment", default_compute="gpu-cluster")
+    def experiment(dataset: Input, note: str, crop_margin: float = 0.10, jitter: float = 0.0,
+                   width: float = 1.0, input_size: int = 96):
+        holdout = {"holdout_days": " ".join(HOLDOUT_DAYS)} if HOLDOUT_DAYS else {}
+        fit = train(
+            dataset=dataset, run_cv=True, crop_margin=crop_margin, jitter=jitter, width=width,
+            input_size=input_size, holdout_eval=False, note=note,
+            mlflow_url=MLFLOW_URL, keyvault_url=KEYVAULT_URL, **holdout,
+        )
+        fit.environment_variables = {"AZURE_CLIENT_ID": client_id, "PYTHONUNBUFFERED": "1"}
+        fit.set_limits(timeout=TIMEOUT_TRAIN)
+
+    return experiment
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--force", action="store_true", help="rebuild even if the fingerprint did not change")
@@ -141,9 +165,25 @@ def main() -> None:
     p.add_argument("--crop-margin", type=float, default=0.10, help="crop margin around the polygon bbox")
     p.add_argument("--jitter", type=float, default=0.0, help="+-fraction of crop shift/scale (training only)")
     p.add_argument("--width", type=float, default=1.0, help="ParkNet filter multiplier")
+    p.add_argument("--input-size", type=int, default=96, help="input side in px (experiments only)")
+    p.add_argument("--experiment", metavar="NAME", help="experiment: train with CV on the latest dataset, no promotion")
+    p.add_argument("--dataset-version", help="experiments: version of the dataset asset (default: the latest)")
     args = p.parse_args()
 
     client = MLClient(DefaultAzureCredential(), SUBSCRIPTION, RESOURCE_GROUP, WORKSPACE)
+    if args.experiment:
+        # the SDK does not resolve name@latest for pipeline inputs: the version is looked up here
+        version = args.dataset_version or client.data.get(DATASET_ASSET, label="latest").version
+        print(f"Dataset {DATASET_ASSET}:{version}")
+        job = build_experiment(cluster_client_id(client, "cpu-cluster"))(
+            dataset=Input(type="uri_folder", path=f"azureml:{DATASET_ASSET}:{version}"),
+            note=args.experiment, crop_margin=args.crop_margin, jitter=args.jitter,
+            width=args.width, input_size=args.input_size,
+        )
+        job = client.jobs.create_or_update(configure(job, "parkwatch-experiments"))
+        print(f"Experiment {args.experiment} submitted: {job.name}\n  {job.studio_url}")
+        return
+
     training = build_pipeline(cluster_client_id(client, "cpu-cluster"))
     job = training(
         rois=Input(type="uri_file", path=str(ROIS)),
