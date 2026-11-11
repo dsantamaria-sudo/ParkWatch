@@ -11,7 +11,10 @@ ANCHOR: the exact camera position for that photo). Every other photo is tracked:
     since the previous photo; the rotation is only estimated from matches spread out enough;
   - a landmark not found is moved with that common movement (so every spot keeps its
     landmarks around it) and, after MISSED_WIDE photos, searched in a wider radius;
-  - with fewer than MIN_LANDMARKS matches the photo is LOST: the previous positions are kept.
+  - with fewer than MIN_LANDMARKS matches, or an implausible rotation since the previous photo
+    (above MAX_STEP_ROTATION_DEG, or above BIG_STEP_ROTATION_DEG with fewer than
+    BIG_STEP_MIN_LANDMARKS matches: chance matches), the photo is LOST: the previous positions
+    are kept.
 
 The lens is a fisheye and the camera does not only rotate: every part of the image moves
 differently. Each spot therefore gets its own warp (reference -> photo), a similarity fitted
@@ -45,6 +48,13 @@ MAX_DISAGREE = 8        # px: a match further than this from the rigid movement 
 SPREAD_ROTATION = 400   # px: the rotation between photos is only estimated from matches this spread out
 MISSED_WIDE = 3
 MIN_LANDMARKS = 3
+# Implausible movement between two photos: chance matches in the dark (9/11 06:08: 3 false
+# matches, -20 deg, every landmark lost for the rest of the day). The real overnight moves seen
+# (4/11) turn 3-3.5 deg with 5-8 matches. A larger rotation is never accepted, a big one only
+# with enough matches; otherwise the photo is LOST (a real knock is fixed with an anchor).
+MAX_STEP_ROTATION_DEG = 10.0
+BIG_STEP_ROTATION_DEG = 2.0
+BIG_STEP_MIN_LANDMARKS = 5
 
 PHOTO_RE = re.compile(r"parkwatch_(\d{4})(\d{2})(\d{2})T\d{6}Z\.jpg$")
 
@@ -271,6 +281,10 @@ class Tracker:
                 found[k] = hit[0]
                 scores.append(hit[1])
         found, motion = coherent(self.positions, found)
+        if motion is not None:
+            rotation = abs(math.degrees(math.atan2(motion[3], motion[0])))
+            if rotation > MAX_STEP_ROTATION_DEG or (rotation > BIG_STEP_ROTATION_DEG and len(found) < BIG_STEP_MIN_LANDMARKS):
+                found = {}
         if len(found) >= MIN_LANDMARKS:
             self.lost = False
             self.positions = {k: found[k] if k in found else apply(motion, self.positions[k][None])[0]

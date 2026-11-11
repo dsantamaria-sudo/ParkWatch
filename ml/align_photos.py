@@ -35,7 +35,7 @@ from azure_utils import credential, get_secret, latest_asset_file, retry
 from landmarks import Tracker, anchors_from_tasks, apply, spot_centres, spot_warps
 from ls_client import export_tasks
 
-TRACKING_VERSION = 1  # bump when landmarks.py changes how positions are measured: rebuilds the table
+TRACKING_VERSION = 2  # bump when landmarks.py changes how positions are measured: rebuilds the table
 JUMP_PX = 15          # alert: a spot centre moving more than this between two photos
 LOST_ALERT = 20       # alert: lost photos in a row in daylight (~1 h)
 
