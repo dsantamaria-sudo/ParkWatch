@@ -4,7 +4,7 @@
 
 **Context:** second MLOps portfolio project, complementary to `tinyConvNeXt` (Azure ML + self-hosted MLflow). ESP32-CAM camera with an OV5640 sensor, placed indoors, looking through a window at an outdoor car park.
 
-**Status:** the full loop runs on Azure ML every night (capture → pre-annotation → human review → retraining → promotion), with per-photo alignment against camera drift. Next: model optimisation (p04/p05 overlap) once the 23/10 + 3/11 holdout decides the next `champion`.
+**Status:** the full loop runs on Azure ML every night (capture → pre-annotation → human review → retraining → promotion), with per-photo alignment against camera drift. Next: model optimisation (p04/p05 overlap) once the 23/10 + 3/11 + 11/11 + 12/11 holdout decides the next `champion`.
 
 ---
 
@@ -207,6 +207,7 @@ Decisions taken — block 8 (model optimisation), 2026-11-08:
 - **Experiment mode:** `aml/pipelines/training.py --experiment <name> [hyperparameters]` runs only `train` (GPU) on the latest registered dataset (`parkwatch-crops@latest`, no rebuild), always with CV, holdout kept out of training but **not evaluated**, nothing registered or promoted; MLflow tag `experiment=<name>` and run name `<date>_w<width>_<size>px_<name>` (Azure ML experiment `parkwatch-experiments`). The winner is then trained and promoted by the normal pipeline with its hyperparameters.
 - **Per-spot metrics:** the per-spot / per-quality macro F1 only averages the classes present (a spot always occupied in the holdout scored 0.5 even when perfect) and every breakdown logs `n_free` / `n_occupied`. Runs before 2026-11-08 keep the old per-spot values: compare per spot only between runs with the new metric (hence a `baseline` experiment first).
 - **First experiments (cheapest first):** `baseline` (current hyperparameters, new metric); A) `crop_margin` 0; C) grey outside the polygon; B) polygon mask as a 4th input channel; then `jitter` / `width` / `input_size`. The user has further ideas to add after these.
+- **Holdout extended (2026-11-11, decided by the user): holdout = 23/10 + 3/11 + 11/11 + 12/11.** With two days, one rare episode decided the promotion (23/10: a large van across p04/p05; `grey0_jit05` was rejected by ~8 crops of 2,336). 23/10 stays (a day that goes in never comes out; an unseen vehicle is a fair test) and 11/11 and 12/11 are added before any of their photos was labelled and without looking at any model on it, to dilute single episodes. Label them with the same rules as the rest and judge each crop by the photo, not by the champion's pre-annotation.
 
 ### Phase 4 — Daily retraining pipeline (recurring, steady state)
 Defined in block 4 of the redesign (Phase 3). Summary of the loop:

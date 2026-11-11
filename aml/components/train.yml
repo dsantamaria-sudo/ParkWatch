@@ -36,6 +36,15 @@ inputs:
   jitter:
     type: number
     default: 0.0
+  mask_channel:
+    type: boolean
+    default: false  # experiment B: spot polygon as a 4th input channel (needs rois)
+  outside:
+    type: string
+    default: keep  # experiment C: grey = everything outside the spot polygon painted grey (needs rois)
+  rois:
+    type: uri_file
+    optional: true  # rois.json of the dataset (with mask_channel / outside grey)
   mlflow_url:
     type: string
     optional: true  # self-hosted MLflow; no value = the job's Azure ML run
@@ -51,6 +60,7 @@ command: >-
   --run-cv ${{inputs.run_cv}} --epochs ${{inputs.epochs}}
   --width ${{inputs.width}} --input-size ${{inputs.input_size}}
   --crop-margin ${{inputs.crop_margin}} --jitter ${{inputs.jitter}}
+  --mask-channel ${{inputs.mask_channel}} --outside ${{inputs.outside}} $[[--rois ${{inputs.rois}}]]
   $[[--holdout-days ${{inputs.holdout_days}}]] --holdout-eval ${{inputs.holdout_eval}}
   $[[--note ${{inputs.note}}]]
   $[[--mlflow-url ${{inputs.mlflow_url}}]] $[[--keyvault-url ${{inputs.keyvault_url}}]]

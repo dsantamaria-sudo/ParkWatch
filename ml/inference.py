@@ -13,7 +13,7 @@ import torch
 from PIL import Image
 
 from alignment import IDENTITY, Warp, align_image
-from crops import crop_spot, letterbox
+from crops import crop_spot, grey_outside, letterbox, polygon_mask, spot_polygons
 from data import to_tensor_normalized
 from parknet import ParkNet
 
@@ -23,7 +23,7 @@ class ParkNetPredictor:
         model_dir = Path(model_dir)
         self.config = json.loads((model_dir / "model_config.json").read_text(encoding="utf-8"))
         c = self.config
-        self.model = ParkNet(len(c["classes"]), c["width"], c["dropout"])
+        self.model = ParkNet(len(c["classes"]), c["width"], c["dropout"], 4 if c.get("mask_channel") else 3)
         self.model.load_state_dict(torch.load(model_dir / "parknet.pt", map_location=device))
         self.model.to(device).eval()
         self.device = device
@@ -39,10 +39,19 @@ class ParkNetPredictor:
             print(f"warning: ROIs {rois['version']} != training ROIs {c['rois_version']}")
         image = image.convert("RGB")
         crops = []
+        grey = c.get("outside") == "grey"  # experiment C
+        polygons = spot_polygons(rois) if c.get("mask_channel") or grey else {}  # experiments B/C
         for s in rois["spots"]:
             aligned = align_image(image, (warps or {}).get(s["id"], IDENTITY))  # reference geometry of this spot
-            crops.append(to_tensor_normalized(letterbox(crop_spot(aligned, s["points"], c["crop_margin"]), c["input_size"]),
-                                              c["norm_mean"], c["norm_std"]))
+            mask = None
+            if polygons:
+                mask = letterbox(crop_spot(polygon_mask(aligned.size, polygons[s["id"]]), s["points"], c["crop_margin"]),
+                                 c["input_size"])
+            crop = letterbox(crop_spot(aligned, s["points"], c["crop_margin"]), c["input_size"])
+            if grey:
+                crop = grey_outside(crop, mask)
+            crops.append(to_tensor_normalized(crop, c["norm_mean"], c["norm_std"],
+                                              mask if c.get("mask_channel") else None))
         batch = torch.stack(crops).to(self.device)
         probs = torch.softmax(self.model(batch), dim=1).cpu().tolist()
         return {s["id"]: dict(zip(c["classes"], p)) for s, p in zip(rois["spots"], probs)}

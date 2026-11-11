@@ -19,6 +19,8 @@ Usage:
   python train.py --data-dir <dataset> --output-dir outputs
   python train.py --data-dir <dataset> --holdout-days 2026-10-19 2026-10-22 --jitter 0.05
   python train.py --data-dir <dataset> --mlflow-url https://<app> --keyvault-url https://<vault>
+  python train.py --data-dir <dataset> --mask-channel true --rois rois.json   # experiment B
+  python train.py --data-dir <dataset> --outside grey --rois rois.json        # experiment C
 """
 from __future__ import annotations
 
@@ -36,6 +38,7 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
+from crops import spot_polygons
 from data import CLASSES, SpotCrops, channel_stats, read_manifest
 from metrics import evaluate
 from parknet import ParkNet, count_parameters
@@ -64,6 +67,11 @@ def parse_args():
     p.add_argument("--jitter", type=float, default=0.0, help="+-fraction of crop shift/scale (training only)")
     p.add_argument("--no-color-aug", action="store_true")
     p.add_argument("--no-hflip", action="store_true")
+    # experiments B and C (plan.md block 8): they use the spot polygon; need the dataset's rois.json
+    p.add_argument("--mask-channel", default="false", help="true = the spot polygon goes in as a 4th channel (B)")
+    p.add_argument("--outside", choices=("keep", "grey"), default="keep",
+                   help="grey = everything outside the spot polygon painted grey (C)")
+    p.add_argument("--rois", type=Path, default=None, help="rois.json of the dataset (with --mask-channel / --outside grey)")
     # training
     p.add_argument("--epochs", type=int, default=40, help="maximum; cross-validation picks how many to use")
     p.add_argument("--final-epochs", type=int, default=None, help="forces the epochs of the final model (skips the CV choice)")
@@ -93,6 +101,27 @@ def is_false(value: str) -> bool:
     return str(value).strip().lower() in ("false", "0", "no")
 
 
+def in_channels(args) -> int:
+    return 4 if args.mask else 3
+
+
+def spot_options(args) -> dict:
+    """SpotCrops options of experiments B/C."""
+    return {"polygons": args.polygons, "mask_channel": args.mask, "outside_grey": args.outside == "grey"}
+
+
+def mask_polygons(args, info: dict) -> dict | None:
+    """Spot polygons for B/C (None = not used). Same ROIs as the dataset, or it fails."""
+    if not args.mask and args.outside == "keep":
+        return None
+    if args.rois is None:
+        sys.exit("--mask-channel / --outside grey need --rois (the rois.json the dataset was built with)")
+    rois = json.loads(args.rois.read_text(encoding="utf-8"))
+    if rois["version"] != info["rois_version"]:
+        sys.exit(f"--rois {rois['version']} != dataset ROIs {info['rois_version']}")
+    return spot_polygons(rois)
+
+
 def seed_everything(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
@@ -120,6 +149,7 @@ class Trainer:
         return SpotCrops(
             a.data_dir, rows, a.input_size, a.crop_margin, mean, std,
             augment=train, jitter=a.jitter, color_aug=not a.no_color_aug, hflip=not a.no_hflip,
+            **spot_options(a),
         )
 
     def loader(self, ds: SpotCrops, shuffle: bool) -> DataLoader:
@@ -132,7 +162,7 @@ class Trainer:
     def build(self, train_rows):
         """New model + class-weighted loss + optimiser and LR schedule."""
         a = self.args
-        model = ParkNet(len(CLASSES), a.width, a.dropout).to(self.device)
+        model = ParkNet(len(CLASSES), a.width, a.dropout, in_channels(a)).to(self.device)
         counts = Counter(r["label"] for r in train_rows)
         weights = torch.tensor(
             [len(train_rows) / (len(CLASSES) * max(1, counts[c])) for c in CLASSES], dtype=torch.float32, device=self.device
@@ -158,17 +188,19 @@ class Trainer:
     @torch.no_grad()
     def predict(self, model, dl):
         model.eval()
-        ys, ps, idxs = [], [], []
+        ys, ps, probs, idxs = [], [], [], []
         for x, y, idx in dl:
-            ps.append(model(x.to(self.device, non_blocking=True)).argmax(1).cpu())
+            p = torch.softmax(model(x.to(self.device, non_blocking=True)), 1).cpu()
+            ps.append(p.argmax(1))
+            probs.append(p[:, CLASSES.index("occupied")])
             ys.append(y)
             idxs.append(idx)
-        return torch.cat(ys).numpy(), torch.cat(ps).numpy(), torch.cat(idxs).numpy()
+        return torch.cat(ys).numpy(), torch.cat(ps).numpy(), torch.cat(idxs).numpy(), torch.cat(probs).numpy()
 
     def evaluate(self, model, dl, ds: SpotCrops) -> dict:
-        y, pred, idx = self.predict(model, dl)
+        y, pred, idx, prob = self.predict(model, dl)
         m = evaluate(y, pred, [ds.rows[i] for i in idx], CLASSES, self.args.dark_thr, self.args.low_contrast_thr)
-        m["_y"], m["_pred"], m["_idx"] = y, pred, idx
+        m["_y"], m["_pred"], m["_idx"], m["_prob"] = y, pred, idx, prob
         return m
 
 
@@ -180,14 +212,14 @@ def cross_validate(trainer: Trainer, dev_rows, folds, mlflow) -> tuple[int, np.n
     """Returns (chosen epochs, F1 curves per fold, validation predictions per fold and epoch)."""
     a = trainer.args
     curves = np.full((len(folds), a.epochs), np.nan)
-    # oof[k] = (validation rows of fold k, [(y, pred) per epoch]) for the out-of-fold report
+    # oof[k] = (validation rows of fold k, [(y, pred, p_occupied) per epoch]) for the out-of-fold report
     oof: list[tuple[list[dict], list[tuple[np.ndarray, np.ndarray]]]] = []
     for k, val_days in enumerate(folds):
         tr = [r for r in dev_rows if r["day"] not in val_days]
         va = [r for r in dev_rows if r["day"] in val_days]
         if not has_both_classes(va):
             print(f"  warning: fold {k} ({val_days}) does not have both classes in validation; its macro F1 is biased")
-        mean, std = channel_stats(a.data_dir, tr, a.input_size, a.crop_margin, seed=a.seed)
+        mean, std = channel_stats(a.data_dir, tr, a.input_size, a.crop_margin, seed=a.seed, **spot_options(a))
         tr_dl = trainer.loader(trainer.dataset(tr, mean, std, train=True), shuffle=True)
         va_ds = trainer.dataset(va, mean, std, train=False)
         va_dl = trainer.loader(va_ds, shuffle=False)
@@ -200,7 +232,7 @@ def cross_validate(trainer: Trainer, dev_rows, folds, mlflow) -> tuple[int, np.n
             sched.step()
             m = trainer.evaluate(model, va_dl, va_ds)
             order = np.argsort(m["_idx"])  # aligned with va_ds.rows
-            per_epoch.append((m["_y"][order], m["_pred"][order]))
+            per_epoch.append((m["_y"][order], m["_pred"][order], m["_prob"][order].astype(np.float32)))
             curves[k, epoch] = m["f1_macro"]
             mlflow.log_metrics({f"cv/fold{k}/loss_train": loss, f"cv/fold{k}/f1_macro_val": m["f1_macro"]}, step=epoch)
             print(f"  epoch {epoch + 1:2d}: loss {loss:.3f} | val F1 {m['f1_macro']:.4f} ({time.time() - t0:.0f}s)")
@@ -214,20 +246,48 @@ def cross_validate(trainer: Trainer, dev_rows, folds, mlflow) -> tuple[int, np.n
 
 def log_oof_report(trainer: Trainer, oof, epochs: int, mlflow) -> dict:
     """Out-of-fold predictions at the chosen epoch: every development crop predicted once, by the
-    model of the fold that did not see it. Confusion matrix, errors and per spot/quality breakdowns."""
+    model of the fold that did not see it. Confusion matrix, errors and per spot/quality breakdowns.
+
+    Also every prediction (eval/cv_oof_predictions.csv, for tools/review_errors.py) and one figure
+    of errors per spot, the most confident first (often wrong labels)."""
     a = trainer.args
     rows = [r for va, _ in oof for r in va]
+    fold = np.concatenate([np.full(len(va), k) for k, (va, _) in enumerate(oof)])
     y = np.concatenate([per_epoch[epochs - 1][0] for _, per_epoch in oof])
     pred = np.concatenate([per_epoch[epochs - 1][1] for _, per_epoch in oof])
+    prob = np.concatenate([per_epoch[epochs - 1][2] for _, per_epoch in oof])
     m = evaluate(y, pred, rows, CLASSES, a.dark_thr, a.low_contrast_thr)
-    m["_y"], m["_pred"], m["_idx"] = y, pred, np.arange(len(rows))
+    m["_y"], m["_pred"], m["_idx"], m["_prob"] = y, pred, np.arange(len(rows)), prob
     mlflow.log_metrics(flat_metrics("cv_oof", m))
     mlflow.log_figure(confusion_figure(m["confusion_matrix"], CLASSES), "eval/cv_oof_confusion.png")
-    fig = errors_figure(SpotCrops(a.data_dir, rows, a.input_size, a.crop_margin), m)
+    mlflow.log_text(predictions_csv(rows, y, pred, prob, fold), "eval/cv_oof_predictions.csv")
+    ds = SpotCrops(a.data_dir, rows, a.input_size, a.crop_margin, **spot_options(a))
+    fig = errors_figure(ds, m)
     if fig is not None:
         mlflow.log_figure(fig, "eval/cv_oof_errors.png")
+    for spot in sorted({r["spot"] for r in rows}):
+        fig = errors_figure(ds, m, max_n=60, spot=spot)
+        if fig is not None:
+            mlflow.log_figure(fig, f"eval/cv_oof_errors_{spot}.png")
     print(f"CV out-of-fold (epoch {epochs}): macro F1 {m['f1_macro']:.4f} | acc {m['acc']:.4f} | matrix {m['confusion_matrix']}")
     return m
+
+
+PREDICTION_COLUMNS = ["blob", "day", "ts_utc", "spot", "label", "pred", "p_occupied", "fold",
+                      "brightness", "contrast", "episode_id", "episode_len", "align_dx", "align_dy", "crop"]
+
+
+def predictions_csv(rows: list[dict], y, pred, prob, fold) -> str:
+    """One row per crop: label, prediction and probability of `occupied` (out-of-fold)."""
+    import csv
+    import io
+
+    out = io.StringIO()
+    w = csv.DictWriter(out, fieldnames=PREDICTION_COLUMNS, extrasaction="ignore", lineterminator="\n")
+    w.writeheader()
+    for r, yi, pi, qi, fi in zip(rows, y, pred, prob, fold):
+        w.writerow({**r, "label": CLASSES[yi], "pred": CLASSES[pi], "p_occupied": round(float(qi), 4), "fold": int(fi)})
+    return out.getvalue()
 
 
 def epochs_from_last_cv(mlflow) -> tuple[int, str] | None:
@@ -265,13 +325,18 @@ def confusion_figure(cm, classes):
     return fig
 
 
-def errors_figure(ds: SpotCrops, m: dict, max_n: int = 36):
+def errors_figure(ds: SpotCrops, m: dict, max_n: int = 36, spot: str | None = None):
+    """Wrong crops as the network sees them; with `spot`, only that spot and the most confident first."""
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    wrong = [k for k in range(len(m["_y"])) if m["_y"][k] != m["_pred"][k]][:max_n]
+    wrong = [k for k in range(len(m["_y"])) if m["_y"][k] != m["_pred"][k]]
+    if spot is not None:
+        wrong = [k for k in wrong if ds.rows[m["_idx"][k]]["spot"] == spot]
+        wrong.sort(key=lambda k: -abs(float(m["_prob"][k]) - 0.5))
+    wrong = wrong[:max_n]
     if not wrong:
         return None
     cols = 6
@@ -285,7 +350,8 @@ def errors_figure(ds: SpotCrops, m: dict, max_n: int = 36):
         ax.imshow(ds.load_image(i))
         ax.set_title(
             f"{row['spot']} {row['day'][5:]} {row['ts_utc'][11:16]}Z\n"
-            f"true {CLASSES[m['_y'][k]]} / pred {CLASSES[m['_pred'][k]]}",
+            f"true {CLASSES[m['_y'][k]]} / pred {CLASSES[m['_pred'][k]]}"
+            + (f" ({float(m['_prob'][k]):.2f})" if "_prob" in m else ""),
             fontsize=7,
         )
     fig.tight_layout()
@@ -300,6 +366,8 @@ def main():
 
     rows = read_manifest(args.data_dir)
     info = json.loads((args.data_dir / "dataset_info.json").read_text(encoding="utf-8"))
+    args.mask = not is_false(args.mask_channel)
+    args.polygons = mask_polygons(args, info)
     holdout_days = set(args.holdout_days)
     unknown = holdout_days - {r["day"] for r in rows}
     if unknown:
@@ -325,11 +393,11 @@ def main():
         if self_hosted and tracking.AZUREML_RUN_ID:
             mlflow.set_tag(tracking.TAG_AZURE_TRAIN_RUN, tracking.AZUREML_RUN_ID)
         tracking.link_azureml_run(run)
-        n_params = count_parameters(ParkNet(len(CLASSES), args.width, args.dropout))
+        n_params = count_parameters(ParkNet(len(CLASSES), args.width, args.dropout, in_channels(args)))
         mlflow.log_params(
             {
                 # final_epochs is logged at the end with the value used (MLflow does not allow changing a param)
-                **{k: (str(v) if isinstance(v, Path) else v) for k, v in vars(args).items() if k not in ("holdout_days", "final_epochs", "mlflow_url", "keyvault_url")},
+                **{k: (str(v) if isinstance(v, Path) else v) for k, v in vars(args).items() if k not in ("holdout_days", "final_epochs", "mlflow_url", "keyvault_url", "polygons", "mask")},
                 "final_epochs_forced": args.final_epochs or "none",
                 "arch": "parknet",
                 "n_params": n_params,
@@ -370,7 +438,7 @@ def main():
         mlflow.log_param("final_epochs", best_epochs)
 
         # 4. Final model on all development days
-        mean, std = channel_stats(args.data_dir, dev, args.input_size, args.crop_margin, seed=args.seed)
+        mean, std = channel_stats(args.data_dir, dev, args.input_size, args.crop_margin, seed=args.seed, **spot_options(args))
         dl = trainer.loader(trainer.dataset(dev, mean, std, train=True), shuffle=True)
         model, loss_fn, opt, sched, class_weights = trainer.build(dev)
         mlflow.log_params({"norm_mean": list(mean), "norm_std": list(std), "class_weights": [round(w, 3) for w in class_weights]})
@@ -406,6 +474,10 @@ def main():
             "dropout": args.dropout,
             "input_size": args.input_size,
             "crop_margin": args.crop_margin,
+            # experiments B/C: the model carries the polygons it was trained with
+            "mask_channel": args.mask,
+            "outside": args.outside,
+            **({"mask_polygons": args.polygons} if args.polygons else {}),
             "norm_mean": list(mean),
             "norm_std": list(std),
             "rois_version": info["rois_version"],

@@ -1,6 +1,6 @@
 """ParkNet: small CNN trained from scratch that classifies a parking spot as free/occupied.
 
-  RGB input of input_size x input_size
+  RGB input of input_size x input_size (+ the spot mask as a 4th channel with in_channels=4)
   4 blocks: [conv3x3 -> BN -> ReLU] x2 -> maxpool 2x2, with 32/64/128/128 filters (x width)
   global average pooling -> dropout -> linear to num_classes logits
 
@@ -19,10 +19,10 @@ def conv_bn_relu(c_in: int, c_out: int) -> list[nn.Module]:
 
 
 class ParkNet(nn.Module):
-    def __init__(self, num_classes: int = 2, width: float = 1.0, dropout: float = 0.3):
+    def __init__(self, num_classes: int = 2, width: float = 1.0, dropout: float = 0.3, in_channels: int = 3):
         super().__init__()
         channels = [max(8, int(round(c * width))) for c in BASE_CHANNELS]
-        layers, c_in = [], 3
+        layers, c_in = [], in_channels
         for c_out in channels:
             layers += conv_bn_relu(c_in, c_out) + conv_bn_relu(c_out, c_out) + [nn.MaxPool2d(2)]
             c_in = c_out

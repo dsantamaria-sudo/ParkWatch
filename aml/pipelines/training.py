@@ -15,6 +15,8 @@ Usage (from the repo root, with az login):
   uv run python aml/pipelines/training.py --run-cv         # full cross-validation
   uv run python aml/pipelines/training.py --force          # rebuild even if the fingerprint did not change
   uv run python aml/pipelines/training.py --experiment crop0 --crop-margin 0.0   # experiment
+  uv run python aml/pipelines/training.py --experiment mask --mask-channel        # experiment B
+  uv run python aml/pipelines/training.py --experiment grey --outside grey        # experiment C
 
 --experiment NAME: only `train` (GPU), on the latest registered dataset (no rebuild), always with
 cross-validation, holdout kept out of training but NOT evaluated, no registration/promotion.
@@ -48,8 +50,18 @@ DATASET_ASSET = "parkwatch-crops"
 ALIGNMENT_ASSET = "parkwatch-alignment"
 # Fixed, whole days chosen by hand (plan.md block 1): a day that goes in never comes out.
 # 23/10: the most varied day. 3/11: reserved before labelling (no model has seen it), with the
-# camera moved, so that the holdout also measures robustness to drift.
-HOLDOUT_DAYS: list[str] = ["2026-10-23", "2026-11-03"]
+# camera moved, so that the holdout also measures robustness to drift. 11/11 and 12/11: added
+# before any of their photos was labelled, so that one rare episode (the large van of 23/10 on
+# p04/p05) weighs less in the promotion (plan.md, block 8).
+HOLDOUT_DAYS: list[str] = ["2026-10-23", "2026-11-03", "2026-11-11", "2026-11-12"]
+
+# Production crop configuration (also the defaults of the nightly/weekly schedules and of the
+# experiments): the champion's. grey0_jit05 (outside grey, margin 0, jitter 0.05) won the CV but
+# was rejected on the holdout on 9/11 (macro F1 0.959 vs 0.963), so production stays here.
+# Changing it changes what the next scheduled run trains and promotes.
+CROP_MARGIN = 0.10
+JITTER = 0.0
+OUTSIDE = "keep"
 
 # Maximum time per step (block 4), in seconds.
 TIMEOUT_DATASET = 60 * 60
@@ -98,7 +110,8 @@ def build_pipeline(client_id: str):
 
     @pipeline(name="parkwatch_training", default_compute="cpu-cluster")
     def training(rois: Input, force: bool = False, run_cv: bool = False,
-                 crop_margin: float = 0.10, jitter: float = 0.0, width: float = 1.0):
+                 crop_margin: float = CROP_MARGIN, jitter: float = JITTER, width: float = 1.0,
+                 outside: str = OUTSIDE):
         align = align_step(align_photos, rois, client_id)
         align.outputs.alignment.name = ALIGNMENT_ASSET  # a new version of the table every night
         alert = drift_alert(alignment=align.outputs.alignment)
@@ -119,7 +132,7 @@ def build_pipeline(client_id: str):
         holdout = {"holdout_days": " ".join(HOLDOUT_DAYS)} if HOLDOUT_DAYS else {}
         fit = train(
             dataset=build.outputs.dataset, run_cv=run_cv,
-            crop_margin=crop_margin, jitter=jitter, width=width,
+            crop_margin=crop_margin, jitter=jitter, width=width, outside=outside, rois=rois,
             mlflow_url=MLFLOW_URL, keyvault_url=KEYVAULT_URL, **holdout,
         )
         fit.compute = "gpu-cluster"
@@ -143,12 +156,13 @@ def build_experiment(client_id: str):
     train = load_component(COMPONENTS / "train.yml")
 
     @pipeline(name="parkwatch_experiment", default_compute="gpu-cluster")
-    def experiment(dataset: Input, note: str, crop_margin: float = 0.10, jitter: float = 0.0,
-                   width: float = 1.0, input_size: int = 96):
+    def experiment(dataset: Input, rois: Input, note: str, crop_margin: float = CROP_MARGIN, jitter: float = JITTER,
+                   width: float = 1.0, input_size: int = 96, mask_channel: bool = False, outside: str = OUTSIDE,
+                   epochs: int = 40):
         holdout = {"holdout_days": " ".join(HOLDOUT_DAYS)} if HOLDOUT_DAYS else {}
         fit = train(
             dataset=dataset, run_cv=True, crop_margin=crop_margin, jitter=jitter, width=width,
-            input_size=input_size, holdout_eval=False, note=note,
+            input_size=input_size, mask_channel=mask_channel, outside=outside, rois=rois, epochs=epochs, holdout_eval=False, note=note,
             mlflow_url=MLFLOW_URL, keyvault_url=KEYVAULT_URL, **holdout,
         )
         fit.environment_variables = {"AZURE_CLIENT_ID": client_id, "PYTHONUNBUFFERED": "1"}
@@ -162,10 +176,14 @@ def main() -> None:
     p.add_argument("--force", action="store_true", help="rebuild even if the fingerprint did not change")
     p.add_argument("--run-cv", action="store_true", help="full cross-validation (default: epochs of the last run with CV)")
     # Hyperparameters to compare in MLflow (block 2); the defaults are those of the base model.
-    p.add_argument("--crop-margin", type=float, default=0.10, help="crop margin around the polygon bbox")
-    p.add_argument("--jitter", type=float, default=0.0, help="+-fraction of crop shift/scale (training only)")
+    p.add_argument("--crop-margin", type=float, default=CROP_MARGIN, help="crop margin around the polygon bbox")
+    p.add_argument("--jitter", type=float, default=JITTER, help="+-fraction of crop shift/scale (training only)")
     p.add_argument("--width", type=float, default=1.0, help="ParkNet filter multiplier")
     p.add_argument("--input-size", type=int, default=96, help="input side in px (experiments only)")
+    p.add_argument("--mask-channel", action="store_true", help="spot mask as a 4th input channel (experiments only, B)")
+    p.add_argument("--outside", choices=("keep", "grey"), default=OUTSIDE,
+                   help="grey = paint everything outside the spot polygon grey (experiment C)")
+    p.add_argument("--epochs", type=int, default=40, help="maximum epochs of the CV (experiments only)")
     p.add_argument("--experiment", metavar="NAME", help="experiment: train with CV on the latest dataset, no promotion")
     p.add_argument("--dataset-version", help="experiments: version of the dataset asset (default: the latest)")
     args = p.parse_args()
@@ -177,8 +195,10 @@ def main() -> None:
         print(f"Dataset {DATASET_ASSET}:{version}")
         job = build_experiment(cluster_client_id(client, "cpu-cluster"))(
             dataset=Input(type="uri_folder", path=f"azureml:{DATASET_ASSET}:{version}"),
+            rois=Input(type="uri_file", path=str(ROIS)),
             note=args.experiment, crop_margin=args.crop_margin, jitter=args.jitter,
-            width=args.width, input_size=args.input_size,
+            width=args.width, input_size=args.input_size, mask_channel=args.mask_channel,
+            outside=args.outside, epochs=args.epochs,
         )
         job = client.jobs.create_or_update(configure(job, "parkwatch-experiments"))
         print(f"Experiment {args.experiment} submitted: {job.name}\n  {job.studio_url}")
@@ -192,6 +212,7 @@ def main() -> None:
         crop_margin=args.crop_margin,
         jitter=args.jitter,
         width=args.width,
+        outside=args.outside,
     )
     job = client.jobs.create_or_update(configure(job, "parkwatch-training"))
     print(f"Pipeline submitted: {job.name}\n  {job.studio_url}")
