@@ -1,8 +1,11 @@
-"""ParkWatch — README figure (docs/images/alignment_before_after.png).
+"""ParkWatch — README figures (docs/images/).
 
-Zoom on spots p04-p05 of a photo taken after the camera moved: fixed ROIs on the raw photo |
-ROIs moved with the landmarks (every spot with its own warp, from the latest alignment table
-written by align_photos) | reference photo.
+alignment_before_after.png: zoom on spots p04-p05 of a photo taken after the camera moved: fixed
+ROIs on the raw photo | ROIs moved with the landmarks (every spot with its own warp, from the
+latest alignment table written by align_photos) | reference photo.
+
+model_input.png: a photo with its five spots and the model input of each one (production crop:
+polygon bbox + margin, letterboxed to the input size).
 
 Usage (repo root; photos read with the connection string in tools/.env, the table with az login):
   uv run python tools/readme_figures.py
@@ -73,6 +76,9 @@ def main() -> None:
     p.add_argument("--rois", type=Path, default=Path("label_studio/rois.json"))
     p.add_argument("--photo", default="2026/11/03/parkwatch_20261103T155920Z.jpg", help="example photo (after the camera fell)")
     p.add_argument("--zoom", default="p04,p05")
+    p.add_argument("--input-photo", default="2026/11/08/parkwatch_20261108T120233Z.jpg", help="photo of the model input figure")
+    p.add_argument("--crop-margin", type=float, default=0.10, help="production crop margin")
+    p.add_argument("--input-size", type=int, default=96)
     p.add_argument("--out", type=Path, default=Path("docs/images"))
     args = p.parse_args()
 
@@ -117,6 +123,37 @@ def main() -> None:
         f"Spots p04–p05 after the camera moved ({drift['dx']:+.0f}, {drift['dy']:+.0f}) px and {drift['angle']:+.1f}°",
     )
     print(f"figure -> {args.out / 'alignment_before_after.png'}")
+
+    # What ParkNet sees: the photo with its spots and the model input of each one (production crop).
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from alignment import IDENTITY, align_image
+    from crop_preview import network_input
+    from crops import spot_polygons
+
+    if args.input_photo not in table.rows:
+        raise SystemExit(f"{args.input_photo} is not in the alignment table")
+    photo = Image.open(io.BytesIO(container.download_blob(args.input_photo).readall())).convert("RGB")
+    warps, polygons = table.warps(args.input_photo), spot_polygons(rois)
+    all_ids = [s["id"] for s in rois["spots"]]
+    overview = draw_rois(photo, rois, COLORS["aligned"], all_ids, width=6, warps=warps)
+    moved = {"spots": [{"id": s["id"], "points": transform_points(s["points"], warps[s["id"]], photo.size)}
+                       for s in rois["spots"]]}
+    fig, axes = plt.subplots(1, 1 + len(all_ids), figsize=(4.4 + 2.1 * len(all_ids), 2.9),
+                             gridspec_kw={"width_ratios": [2.1] + [1] * len(all_ids)})
+    axes[0].imshow(overview.crop(zoom_box(moved, all_ids, photo.size, margin=0.25)))
+    axes[0].set_title("Photo with the five spots", fontsize=11)
+    for ax, s in zip(axes[1:], rois["spots"]):
+        aligned = align_image(photo, warps.get(s["id"], IDENTITY))
+        ax.imshow(network_input(aligned, s["points"], polygons[s["id"]], "keep", args.crop_margin, args.input_size),
+                  interpolation="nearest")
+        ax.set_title(s["id"], fontsize=11)
+    for ax in axes:
+        ax.set_xticks([]), ax.set_yticks([])
+    fig.suptitle(f"Model input: one {args.input_size}×{args.input_size} crop per spot", fontsize=12, y=1.0)
+    fig.tight_layout()
+    fig.savefig(args.out / "model_input.png", dpi=130, bbox_inches="tight")
+    plt.close(fig)
+    print(f"figure -> {args.out / 'model_input.png'}")
 
 
 if __name__ == "__main__":
