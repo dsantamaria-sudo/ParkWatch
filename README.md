@@ -53,25 +53,23 @@ Azure Blob Storage is where everything else starts. Photos are stored in one fol
 
 ## 2. Image processing
 
-### 2.1 The camera moves: landmark anchors
+### 2.1 From photo to model input
 
-Each spot is a fixed polygon drawn once on a reference photo. But the camera is glued to a window: it drifts slowly, it gets knocked, and one day it fell and had to be glued back. With fixed polygons the crops stop covering their spot.
+The model never looks at the whole photo. I drew one polygon per parking spot on a reference photo, and every photo is cut into five small images, one per spot. Each crop is the box around the polygon plus a 10 % margin, placed on a 96×96 square without stretching it.
 
-**Fix:** 15 fixed points of the scene (corners of buildings, windows) are clicked once on the reference photo. Every later photo is tracked from the previous one: each landmark is searched near where it was, and matches that disagree with the common movement are rejected. After a big movement, the landmarks are clicked again on one photo (an *anchor*) and the tracking restarts from there.
+![A photo with its five spots and the crop the model sees for each one](docs/images/model_input.png)
 
-- The lens is a fisheye, so every part of the image moves differently: each spot gets its own correction, fitted to the landmarks around it.
-- Dark photos give chance matches, so an implausible movement between two photos is rejected and the previous position is kept.
-- If a spot jumps or the landmarks are lost in daylight, the pipeline sends an email with the photo to anchor.
+The same code makes the crops for training, evaluation and inference, so the model always sees exactly what it was trained on. During training I also add small colour changes and horizontal flips, so that it doesn't memorise the exact photos.
 
-At the anchors, the tracking arrives within 10 px of the clicks (mostly 1–6 px).
+### 2.2 The camera moves: landmark anchors
 
-![Spots p04–p05 after the camera moved: fixed polygons miss the spots; moved with the landmarks they cover them again](docs/images/alignment_before_after.png)
+Polygons drawn once would be enough if the camera never moved, but it is glued to a window. It drifts a little every day, it gets knocked when someone opens the window, and once it fell off and I had to glue it back. After that, the polygons no longer sat on their spots.
 
-### 2.2 From photo to model input
+To fix it, I picked 15 points of the scene that never move, like the corners of buildings and windows, and clicked them once on the reference photo. For every new photo, the pipeline looks for each point close to where it was in the previous photo, and drops the matches that don't agree with how the others moved. From those points it works out where each spot is now. When the camera moves a lot, I click the points again on one photo, which I call an anchor, and the tracking carries on from there.
 
-For every spot, the photo is cropped to the bounding box of its polygon plus a 10 % margin, and letterboxed to a 96×96 square without stretching. The same code builds the crop in training, evaluation and inference. In training, the crops also get light colour changes and horizontal flips.
+![The landmark alignment in three steps: reference photo, landmarks found again in a later photo, and spots moved with them](docs/images/landmark_alignment.png)
 
-![A photo with its five spots and the model input of each one](docs/images/model_input.png)
+Because the lens is a fisheye, the image doesn't move the same amount everywhere, so each spot gets its own correction from the landmarks closest to it. Checked against the anchors, the tracking lands within 10 px of my clicks, and usually within 1 to 6 px.
 
 ## 3. Review and labelling in Label Studio
 
