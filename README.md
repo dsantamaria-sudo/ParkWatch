@@ -172,8 +172,4 @@ To launch the pipelines by hand, from the repo root and after `az login`:
 uv run python aml/pipelines/training.py      # retrains if the labels changed
 uv run python aml/pipelines/inference.py     # predicts the last days and updates Label Studio
 uv run python aml/pipelines/schedules.py     # creates or updates the nightly schedules
-
-uv run python aml/pipelines/training.py      # training pipeline (retrains if the dataset changed)
-uv run python aml/pipelines/inference.py     # inference pipeline (pre-annotates the last days)
-uv run python aml/pipelines/schedules.py     # creates or updates the nightly schedules
 ```
