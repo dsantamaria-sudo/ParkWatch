@@ -9,6 +9,9 @@ position) and the spots where they would be without correction | the same photo 
 moved with its own warp. Positions and warps come from the latest alignment table written by
 align_photos.
 
+parknet.png: ParkNet as a row of feature maps, from a real crop to the two classes (the sizes are
+those of ml/parknet.py with width 1.0 and the production input size).
+
 Usage (repo root; photos read with the connection string in tools/.env, the table with az login):
   uv run python tools/readme_figures.py
   uv run python tools/readme_figures.py --photo 2026/11/08/parkwatch_20261108T120233Z.jpg
@@ -129,12 +132,69 @@ def landmark_alignment(reference: Image.Image, photo: Image.Image, rois: dict, t
     plt.close(fig)
 
 
+def parknet_architecture(crop: Image.Image, size: int, path: Path) -> None:
+    """ParkNet as a row of feature maps (ml/parknet.py, width 1.0): the sizes are the real ones."""
+    from matplotlib.patches import FancyArrowPatch, FancyBboxPatch, Rectangle
+
+    channels = (32, 64, 128, 128)
+    side = lambda s: 0.55 + 2.45 * (s / size) ** 0.5   # drawn height of a size x size map  # noqa: E731
+    depth = lambda c: 0.28 + 0.0052 * c                # drawn width of c channels  # noqa: E731
+    fig, ax = plt.subplots(figsize=(15.5, 4.3))
+    ax.set_xlim(0, 17.6), ax.set_ylim(-2.45, 2.2)
+    ax.set_aspect("equal")
+    ax.axis("off")
+
+    def arrow(x0: float, x1: float, text: str = "") -> None:
+        ax.add_patch(FancyArrowPatch((x0, 0), (x1, 0), arrowstyle="-|>", mutation_scale=14, color="#555", lw=1.4))
+        if text:
+            ax.text((x0 + x1) / 2, 0.16, text, ha="center", va="bottom", fontsize=8.5, color="#444")
+
+    def volume(x: float, s: int, c: int, color: str, title: str, shape: str) -> float:
+        hgt, wid = side(s), depth(c)
+        for k in (2, 1, 0):  # three sheets: a stack of feature maps
+            off = 0.09 * k
+            ax.add_patch(Rectangle((x + off, -hgt / 2 + off), wid, hgt, facecolor=color, edgecolor="#333", lw=1, zorder=3 - k))
+        ax.text(x + wid / 2 + 0.09, -hgt / 2 - 0.16, shape, ha="center", va="top", fontsize=9.5, color="#111")
+        ax.text(x + wid / 2 + 0.09, hgt / 2 + 0.3, title, ha="center", va="bottom", fontsize=10, color="#111")
+        return x + wid + 0.18
+
+    # input: a real crop
+    h0 = side(size)
+    ax.imshow(crop, extent=(0.2, 0.2 + h0, -h0 / 2, h0 / 2), aspect="auto", interpolation="nearest", zorder=2)
+    ax.add_patch(Rectangle((0.2, -h0 / 2), h0, h0, fill=False, edgecolor="#333", lw=1, zorder=3))
+    ax.text(0.2 + h0 / 2, h0 / 2 + 0.3, "Input crop", ha="center", va="bottom", fontsize=10)
+    ax.text(0.2 + h0 / 2, -h0 / 2 - 0.16, f"{size}×{size}×3", ha="center", va="top", fontsize=9.5)
+    x, s = 0.2 + h0, size
+    for k, (c, color) in enumerate(zip(channels, ("#ddd6fe", "#c4b5fd", "#a78bfa", "#8b5cf6")), 1):
+        arrow(x + 0.12, x + 1.42)
+        s //= 2
+        x = volume(x + 1.5, s, c, color, f"Block {k}", f"{s}×{s}×{c}")
+    arrow(x + 0.12, x + 1.42, "global\naverage\npooling")
+    x += 1.5
+    ax.add_patch(Rectangle((x, -1.05), 0.22, 2.1, facecolor="#fcd34d", edgecolor="#333", lw=1))
+    ax.text(x + 0.11, 1.35, "Features", ha="center", va="bottom", fontsize=10)
+    ax.text(x + 0.11, -1.21, str(channels[-1]), ha="center", va="top", fontsize=9.5)
+    arrow(x + 0.34, x + 1.64, "dropout 0.3\nlinear")
+    x += 1.72
+    for y, label, color in ((0.45, "free", "#2ecc71"), (-0.45, "occupied", "#e74c3c")):
+        ax.add_patch(FancyBboxPatch((x, y - 0.27), 1.5, 0.54, boxstyle="round,pad=0.02,rounding_size=0.12",
+                                    facecolor=color, edgecolor="#333", lw=1))
+        ax.text(x + 0.75, y, label, ha="center", va="center", fontsize=10.5, color="white", fontweight="bold")
+    ax.text(x + 0.75, 1.35, "Output", ha="center", va="bottom", fontsize=10)
+    ax.text(8.8, -2.42, "Each block: 2 × (3×3 convolution → batch normalisation → ReLU), then 2×2 max pooling"
+                        "   ·   583,138 parameters", ha="center", va="bottom", fontsize=10, color="#333")
+    ax.set_title("ParkNet", fontsize=14, pad=2)
+    fig.savefig(path, dpi=130, bbox_inches="tight")
+    plt.close(fig)
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--rois", type=Path, default=Path("label_studio/rois.json"))
     p.add_argument("--photo", default="2026/11/08/parkwatch_20261108T120233Z.jpg", help="example photo (camera moved)")
     p.add_argument("--crop-margin", type=float, default=0.10, help="production crop margin")
     p.add_argument("--input-size", type=int, default=96)
+    p.add_argument("--example-spot", default="p04", help="spot whose crop is the input of the ParkNet figure")
     p.add_argument("--out", type=Path, default=Path("docs/images"))
     args = p.parse_args()
 
@@ -166,6 +226,11 @@ def main() -> None:
     landmark_alignment(reference, photo, rois, rows, rois["source_image"], args.photo, warps,
                        args.out / "landmark_alignment.png")
     print(f"figure -> {args.out / 'landmark_alignment.png'}")
+    spot = next(s for s in rois["spots"] if s["id"] == args.example_spot)
+    crop = network_input(align_image(photo, warps.get(spot["id"], IDENTITY)), spot["points"],
+                         spot_polygons(rois)[spot["id"]], "keep", args.crop_margin, args.input_size)
+    parknet_architecture(crop, args.input_size, args.out / "parknet.png")
+    print(f"figure -> {args.out / 'parknet.png'}")
 
 
 if __name__ == "__main__":
