@@ -2,9 +2,9 @@
 
 End-to-end MLOps system that tells you which spots in a car park are free, using photos from an ESP32 camera. The whole loop runs by itself every night on Azure ML: the camera captures, the model pre-annotates, I review the labels in Label Studio, it retrains, and the best model gets promoted.
 
-Current model: 97.2% accurate (macro F1 0.969) on entire days it has never seen. I trained it on 28,000 labelled crops from 25 days of photos.
+*Current model*: 97.2% accurate (macro F1 0.969) on entire days it has never seen. I trained it on 28,000 labelled crops from 25 days of photos.
 
-Stack: ESP32-S3 + OV5640 · Raspberry Pi (FastAPI) · Azure Blob · Label Studio · Azure ML (pipelines, schedules, model registry) · MLflow · PyTorch · OpenCV · Bicep
+*Stack*: ESP32-S3 + OV5640 · Raspberry Pi (FastAPI) · Azure Blob · Label Studio · Azure ML (pipelines, schedules, model registry) · MLflow · PyTorch · OpenCV · Bicep
 
 ## How it works
 
