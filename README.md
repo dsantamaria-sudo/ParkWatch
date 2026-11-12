@@ -71,6 +71,50 @@ To fix it, I picked 15 points of the scene that never move, like the corners of 
 
 Because the lens is a fisheye, the image doesn't move the same amount everywhere, so each spot gets its own correction from the landmarks closest to it. Checked against the anchors, the tracking lands within 10 px of my clicks, and usually within 1 to 6 px.
 
+## 3. The ML lifecycle
+
+Once the photos are in Blob Storage, the rest is a loop that repeats every night. A model is trained, the best one predicts the new photos, I correct its mistakes, and those corrections feed the next training.
+
+### 3.1 Training ParkNet
+
+The model is ParkNet, a small convolutional network that I built for this problem and train from scratch. It takes one 96×96 crop and answers `free` or `occupied`.
+
+![ParkNet: from a 96×96 crop, through four convolutional blocks, to free or occupied](docs/images/parknet.png)
+
+Each block halves the size of the image and looks for more complex patterns than the one before. In total it has 583,000 parameters, small enough to retrain from scratch every night on a single GPU.
+
+The training pipeline starts every night at 02:00. Before training, it checks whether anything has changed since the last run: the labels I corrected, the polygons of the spots or the alignment of the photos. If nothing has changed, the model would come out the same, so it stops there.
+
+Once a week it does a longer run to check how well the model generalises. It splits the days into four groups, trains four times leaving one group out each time, and tests each model on the days it didn't see. I use those results to decide how long to train and to compare new ideas.
+
+Every training logs its parameters, metrics, confusion matrix and images of its errors to MLflow, so I can look at what failed and not only at the score.
+
+### 3.2 Model registry: promoting the champion
+
+A new model doesn't go into use just because it is new. It is compared with the current best model, the *champion*, on the same holdout: whole days that no model has ever trained on. The new model takes the champion's place only if it scores at least as well.
+
+The score I use is macro F1, not accuracy. The car park is full most of the time, so only about one in five crops shows a free spot. A model that answered "occupied" almost always would still get a high accuracy, and it would be useless, because the free spots are exactly what I want to find. Macro F1 gives the same weight to `free` and `occupied`, however many examples each one has, so a model has to be good at both to score well.
+
+Every version is kept in the Azure ML model registry, and one of them carries the `champion` tag.
+
+### 3.3 Inference
+
+At 04:00, two hours after the training, the inference pipeline runs. If a new model was promoted that night, this is the first time it is used.
+
+It takes the champion and predicts every spot in the photos of the last three days. Before predicting, it works out where each spot is in each photo, with the landmark alignment from section 2.2, so the model looks at the right place even if the camera moved that day.
+
+The results go to Label Studio as one task per photo, with the five polygons already in place and coloured by the prediction. Each one carries the model's confidence, so I can go straight to the photos it wasn't sure about. Tasks that I have already reviewed are never touched: the pipeline only fills in the ones that are still waiting.
+
+### 3.4 Review in Label Studio
+
+This is the only manual step. I open the tasks and fix the spots the model got wrong. There are three labels: `free`, `occupied`, and `exclude` for the spots I can't judge, for example when it is too dark or the lens is fogged. Excluded spots are left out of the dataset.
+
+![A Label Studio task with the five spots pre-annotated by the model, each with its confidence](docs/images/label_studio.png)
+
+Only the label matters. Training always cuts the crops from its own polygons, so moving a polygon by accident in Label Studio changes nothing. My corrections change the dataset, the next training picks them up, and the loop starts again.
+
+
+
 ## 3. Review and labelling in Label Studio
 
 Nobody labels from scratch. Every night the current best model (the *champion*) predicts the new photos and creates one Label Studio task per photo, with the five polygons already placed over their spots and coloured by the predicted label. The reviewer only fixes the wrong ones.
