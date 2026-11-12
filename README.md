@@ -45,9 +45,11 @@ flowchart LR
 
 ## 1. Image capture
 
-- **Camera:** a Freenove ESP32-S3-WROOM CAM board with an OV5640 sensor, glued to a window. The firmware knows nothing about schedules or light: it takes a photo every 3 minutes and POSTs the JPEG to a Raspberry Pi on the same network.
-- **Raspberry Pi:** a small FastAPI service receives each photo, discards the ones taken at night (civil twilight ± 15 min, computed for the camera's location), straightens and resizes it to 1600 px, and uploads it to Azure Blob Storage, one folder per day. If the upload fails, the photo waits in a local spool and is retried.
-- **Azure Blob:** the only source of photos for everything else. About 230 photos per day.
+The camera is a [Freenove ESP32-S3-WROOM CAM board](https://www.amazon.es/dp/B0F48DV38M) with an [OV5640 sensor](https://es.aliexpress.com/item/1005006858943975.html), glued to a window that looks over the car park. I kept its firmware as simple as I could: it takes a photo every 3 minutes and sends it to a Raspberry Pi on the same network. It doesn't know what time it is or whether it's dark outside.
+
+The Raspberry Pi does the thinking. A small FastAPI service receives each photo and throws away the ones taken at night, using the civil twilight times for the camera's location with a 15-minute margin. The photos that pass are rotated, resized to 1600 px and uploaded to Azure Blob Storage. If the upload fails, the photo stays on the Pi and it tries again later, so a Wi-Fi cut doesn't lose anything.
+
+Azure Blob Storage is where everything else starts. Photos are stored in one folder per day, about 230 a day, and both pipelines read from there: training takes the labelled photos and inference takes the new ones.
 
 ## 2. Image processing
 
