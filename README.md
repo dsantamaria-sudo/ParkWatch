@@ -107,63 +107,39 @@ The results go to Label Studio as one task per photo, with the five polygons alr
 
 ### 3.4 Review in Label Studio
 
-This is the only manual step. I open the tasks and fix the spots the model got wrong. There are three labels: `free`, `occupied`, and `exclude` for the spots I can't judge, for example when it is too dark or the lens is fogged. Excluded spots are left out of the dataset.
+This is the only manual step, and the reason the model keeps improving. Every morning the photos of the day before are waiting in Label Studio with the model's answer on each spot. I don't label from scratch: I go through them and fix only the spots it got wrong.
 
 ![A Label Studio task with the five spots pre-annotated by the model, each with its confidence](docs/images/label_studio.png)
 
-Only the label matters. Training always cuts the crops from its own polygons, so moving a polygon by accident in Label Studio changes nothing. My corrections change the dataset, the next training picks them up, and the loop starts again.
+There are three labels. `free` and `occupied` are what the model learns. `exclude` is for the spots I can't judge myself, for example when it is too dark or the lens is fogged, and those are left out of the dataset. I would rather lose a photo than teach the model something I'm not sure about.
 
+Only the label matters. Training always cuts the crops from its own polygons, so moving a polygon by accident in Label Studio changes nothing.
 
+My corrections change the dataset, the next training at 02:00 picks them up, and the loop starts again.
 
-## 3. Review and labelling in Label Studio
+## 4. Infrastructure
 
-Nobody labels from scratch. Every night the current best model (the *champion*) predicts the new photos and creates one Label Studio task per photo, with the five polygons already placed over their spots and coloured by the predicted label. The reviewer only fixes the wrong ones.
+Everything runs on Azure, and I set it up so that it costs money only while something is running.
 
-- **Three labels:** `free`, `occupied`, and `exclude` when the spot cannot be judged (too dark, fogged lens). Excluded crops are left out of the dataset.
-- **Only the label is used.** Training always crops from the fixed polygons and the alignment, so moving a polygon by accident in Label Studio changes nothing.
-- Each prediction carries the model's confidence, so the doubtful photos can be reviewed first.
-
-![A Label Studio task with the five spots pre-annotated by the model, each with its confidence](docs/images/label_studio.png)
-
-## 4. Architecture
-
-### 4.1 ParkNet
-
-A small CNN trained from scratch that classifies one crop as `free` or `occupied`: four blocks of two 3×3 convolutions (32, 64, 128 and 128 filters) with batch normalisation and max pooling, then global average pooling, dropout and a linear layer. It has 583,000 parameters, small enough to retrain from scratch every night on one GPU.
-
-### 4.2 Pipelines and experiment tracking
-
-Two independent Azure ML pipelines, each on a nightly schedule:
-
-| Pipeline | Steps |
-| --- | --- |
-| **Training** (02:00) | align photos → check whether the dataset changed → build dataset → train → evaluate and promote |
-| **Inference** (04:00) | align photos → predict with the champion → create or update the Label Studio tasks |
-
-- **Retraining only when needed.** A fingerprint of the labels, the polygons and the alignment decides whether the dataset changed. If it did not, the night ends after the alignment.
-- **Promotion.** The new model replaces the champion only if it matches or beats its macro F1 on the holdout, both evaluated on the same crops.
-- **MLflow.** Every training logs its parameters, metrics, confusion matrix and error sheets to a self-hosted MLflow server, together with the comparison against the champion and the decision. Models live in the Azure ML registry, where one version carries the `champion` tag.
-
-### 4.3 Compute
-
-| Cluster | VM | Used for |
+| What | Where it runs | Used for |
 | --- | --- | --- |
-| CPU | Standard_D4as_v4 (4 vCPU) | alignment, dataset, inference, promotion |
-| GPU | Standard_NC4as_T4_v3 (one NVIDIA T4) | training |
+| CPU cluster | Standard_D4as_v4 (4 vCPU) | alignment, dataset, inference, promotion |
+| GPU cluster | Standard_NC4as_T4_v3 (one NVIDIA T4) | training |
+| Label Studio | Azure Container App | reviewing the labels |
+| MLflow | Azure Container App | tracking every training |
 
-Both clusters scale to zero, and so does the MLflow server: there is only a cost while a pipeline runs. The infrastructure is defined in Bicep, and the jobs reach storage, Key Vault and Label Studio with a managed identity, without keys in the code.
+The two clusters have between zero and one machine. A machine starts when a pipeline needs it and is released when the pipeline finishes, so most of the day nothing is running. The MLflow server does the same: it sleeps until a training or I need it.
 
-## 5. Evaluation and results
+The pipelines are two Azure ML schedules, one for training and one for inference. If a step fails, or the camera alignment raises an alert, Azure sends me an email.
 
-- **Holdout:** whole days that no model ever trains on, chosen by hand. A day that goes in never comes out. Splitting by days matters: photos three minutes apart are almost identical, so a random split would leak.
-- **Cross-validation:** four folds grouped by day, run weekly, to choose the number of epochs and to compare experiments without touching the holdout.
-- **Metric:** macro F1 over `free` and `occupied`.
+## 5. Results
 
-Champion (`parknet:11`) on the two holdout days labelled so far (23 Oct and 3 Nov, 2,329 crops; 3 Nov is a day with the camera moved):
+The numbers below come from the holdout: whole days set apart that no model ever trains on. I split by days and not by photos because two photos taken three minutes apart are almost the same picture, so a random split would make the model look better than it is.
 
-| | Accuracy | Crops |
+The current champion gets **97.2 % of the spots right** (macro F1 0.969).
+
+| Spot | Accuracy | Crops |
 | --- | --- | --- |
-| **All spots** | **97.2 %** (macro F1 0.969) | 2,329 |
 | p01 | 97.3 % | 490 |
 | p02 | 100 % | 479 |
 | p03 | 96.3 % | 481 |
@@ -176,26 +152,27 @@ Champion (`parknet:11`) on the two holdout days labelled so far (23 Oct and 3 No
 | Low contrast | 96.4 % | 523 |
 | Dark | 95.6 % | 250 |
 
-**Known limitations**
-
-- **p04** is the hardest spot: vehicles parked in the neighbouring spots enter its crop.
-- **Dusk and dawn:** dark photos fail more than daylight ones.
-- **Rare cases:** hard shadows across a spot, and vehicles the model has seen few times (vans seen from above).
-
 ## Repository
 
-| Folder | Contents |
+| Folder | What's inside |
 | --- | --- |
-| `esp32_firmware/`, `pi_receiver/` | Capture: camera firmware and Raspberry Pi service |
-| `ml/` | Pipeline steps: alignment, dataset, ParkNet, training, promotion, inference |
-| `aml/` | Azure ML environments, components, pipelines and schedules |
-| `infra/` | Azure infrastructure in Bicep |
-| `label_studio/`, `tools/` | Labelling config, spot polygons and local tools |
-| `plan.md` | Decision log |
+| `esp32_firmware/` | The camera firmware |
+| `pi_receiver/` | The service on the Raspberry Pi that filters and uploads the photos |
+| `ml/` | Every step of the pipelines: alignment, dataset, ParkNet, training, promotion and inference |
+| `aml/` | The Azure ML side: environments, components, pipelines and schedules |
+| `infra/` | The Azure infrastructure, written in Bicep |
+| `label_studio/` | The labelling setup and the polygons of the spots |
+| `tools/` | Scripts I run on my laptop: reviewing errors, previewing crops, creating anchor tasks, the README figures |
+| `docs/images/` | The images of this README |
+| `plan.md` | My decision log: what I tried, what worked and why I chose each thing |
 
-Run from the repo root, with `az login`:
+To launch the pipelines by hand, from the repo root and after `az login`:
 
 ```bash
+uv run python aml/pipelines/training.py      # retrains if the labels changed
+uv run python aml/pipelines/inference.py     # predicts the last days and updates Label Studio
+uv run python aml/pipelines/schedules.py     # creates or updates the nightly schedules
+
 uv run python aml/pipelines/training.py      # training pipeline (retrains if the dataset changed)
 uv run python aml/pipelines/inference.py     # inference pipeline (pre-annotates the last days)
 uv run python aml/pipelines/schedules.py     # creates or updates the nightly schedules
