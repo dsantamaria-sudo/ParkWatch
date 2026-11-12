@@ -10,12 +10,37 @@ End-to-end MLOps system that tells you which spots in a car park are free, using
 
 ```mermaid
 flowchart LR
-    cam[ESP32-S3 camera<br/>1 photo / 3 min] --> pi[Raspberry Pi<br/>daylight filter] --> raw[(Azure Blob)]
-    raw --> infer[Inference pipeline · 04:00<br/>champion pre-annotates new photos]
-    infer --> ls[Label Studio<br/>human review]
-    ls --> train[Training pipeline · 02:00<br/>retrain only if labels changed]
-    train -->|promote if macro F1 ≥ champion| registry[(Model registry)]
-    registry --> infer
+    CAM["ESP32-S3 Camera<br/>Photo every 3 min"]
+    PI["Raspberry Pi<br/>FastAPI · Image filtering"]
+    BLOB[("Azure Blob Storage<br/>Raw images")]
+
+    subgraph ML["ML Lifecycle"]
+        direction LR
+
+        TRAIN["Model Training<br/>Azure ML · 02:00<br/>Conditional retraining"]
+        REG[("Azure ML<br/>Model Registry")]
+        INF["Model Inference<br/>Azure ML · 04:00"]
+        LS["Label Studio<br/>Human annotation"]
+
+        TRAIN -->|"Promote if macro F1 ≥ champion"| REG
+        REG -.->|"Champion model"| INF
+        INF -->|"Predictions"| LS
+        LS -->|"Reviewed annotations"| TRAIN
+    end
+
+    CAM --> PI --> BLOB
+    BLOB -->|"Training images"| TRAIN
+    BLOB -->|"New images"| INF
+
+    classDef hardware fill:#eff6ff,stroke:#3b82f6,color:#1e3a8a,stroke-width:2px
+    classDef storage fill:#ecfdf5,stroke:#10b981,color:#065f46,stroke-width:2px
+    classDef ml fill:#f5f3ff,stroke:#8b5cf6,color:#4c1d95,stroke-width:2px
+    classDef human fill:#fff7ed,stroke:#f59e0b,color:#7c2d12,stroke-width:2px
+
+    class CAM,PI hardware
+    class BLOB,REG storage
+    class TRAIN,INF ml
+    class LS human
 ```
 
 ## 1. Image capture
