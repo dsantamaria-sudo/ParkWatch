@@ -2,7 +2,7 @@
 
 End-to-end MLOps system that tells you which spots in a car park are free, using photos from an ESP32 camera. The whole loop runs by itself every night on Azure ML: the camera captures, the model pre-annotates, I review the labels in Label Studio, it retrains, and the best model gets promoted.
 
-*Current model*: 97.2% accurate (macro F1 0.969) on entire days it has never seen. I trained it on 28,000 labelled crops from 25 days of photos.
+*Current model*: 98.6% accurate (macro F1 0.984) on entire days it has never seen. I trained it on 27,000 labelled crops from 24 days of photos.
 
 *Stack*: ESP32-S3 + OV5640 · Raspberry Pi (FastAPI) · Azure Blob · Label Studio · Azure ML (pipelines, schedules, model registry) · MLflow · PyTorch · OpenCV · Bicep
 
@@ -59,7 +59,9 @@ The model never looks at the whole photo. I drew one polygon per parking spot on
 
 ![A photo with its five spots and the crop the model sees for each one](docs/images/model_input.png)
 
-The same code makes the crops for training, evaluation and inference, so the model always sees exactly what it was trained on. During training I also add small colour changes and horizontal flips, so that it doesn't memorise the exact photos.
+The same code makes the crops for training, evaluation and inference, so the model always sees exactly what it was trained on. During training I also add small colour changes and horizontal flips, and I move and resize each crop a little at random, so that it doesn't memorise the exact photos.
+
+That last change came from a surprise. When I made the camera alignment (section 2.2) more precise, the crops became so consistent that every new model did a bit worse than the old one, even with more data. The old alignment had been adding a little noise by accident, and that noise was helping the model generalise. Moving each crop by up to 5 % at random brought that back on purpose, and the next model beat the old one.
 
 ### 2.2 The camera moves: landmark anchors
 
@@ -136,21 +138,21 @@ The pipelines are two Azure ML schedules, one for training and one for inference
 
 The numbers below come from the holdout: whole days set apart that no model ever trains on. I split by days and not by photos because two photos taken three minutes apart are almost the same picture, so a random split would make the model look better than it is.
 
-The current champion gets **97.2 % of the spots right** (macro F1 0.969).
+The current champion gets **98.6 % of the spots right** (macro F1 0.984).
 
 | Spot | Accuracy | Crops |
 | --- | --- | --- |
-| p01 | 97.3 % | 490 |
-| p02 | 100 % | 479 |
-| p03 | 96.3 % | 481 |
-| p04 | 92.3 % | 441 |
-| p05 | 99.8 % | 438 |
+| p01 | 98.3 % | 924 |
+| p02 | 100 % | 912 |
+| p03 | 99.1 % | 917 |
+| p04 | 95.8 % | 874 |
+| p05 | 99.8 % | 871 |
 
 | Image quality | Accuracy | Crops |
 | --- | --- | --- |
-| Good | 97.7 % | 1,556 |
-| Low contrast | 96.4 % | 523 |
-| Dark | 95.6 % | 250 |
+| Good | 99.3 % | 3,211 |
+| Low contrast | 97.9 % | 947 |
+| Dark | 94.4 % | 340 |
 
 ## Repository
 
