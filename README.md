@@ -61,8 +61,6 @@ The model never looks at the whole photo. I drew one polygon per parking spot on
 
 The same code makes the crops for training, evaluation and inference, so the model always sees exactly what it was trained on. During training I also add small colour changes and horizontal flips, and I move and resize each crop a little at random, so that it doesn't memorise the exact photos.
 
-That last change came from a surprise. When I made the camera alignment (section 2.2) more precise, the crops became so consistent that every new model did a bit worse than the old one, even with more data. The old alignment had been adding a little noise by accident, and that noise was helping the model generalise. Moving each crop by up to 5 % at random brought that back on purpose, and the next model beat the old one.
-
 ### 2.2 The camera moves: landmark anchors
 
 Polygons drawn once would be enough if the camera never moved, but it is glued to a window. It drifts a little every day, it gets knocked when someone opens the window, and once it fell off and I had to glue it back. After that, the polygons no longer sat on their spots.
