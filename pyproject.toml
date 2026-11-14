@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "End-to-end MLOps for parking occupancy: ESP32-CAM -> Raspberry Pi -> Azure Blob -> Label Studio -> Azure ML pipelines"
 readme = "README.md"
 requires-python = ">=3.12"
-# Local environment: the tools/ scripts (ROIs, static mask, camera drift, holdout).
+# Local environment: the tools/ scripts (ROIs, landmarks, crop previews, error review, figures).
 # Training and inference run on Azure ML with their own environments (aml/environments/);
 # the Pi installs pi_receiver/requirements.txt.
 dependencies = [

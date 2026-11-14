@@ -14,7 +14,6 @@ pi_receiver/.env
 pi_receiver/spool/
 esp32_firmware/**/parkwatch_secrets.h
 tools/.env
-tasks.json
 
 # ParkWatch — personal data and local configuration
 # raw Label Studio exports (they include the user's email)
@@ -26,7 +25,6 @@ labelstudio.yaml
 # ParkWatch — local data and artifacts (drift, previews, downloaded datasets)
 data/
 mlruns/
-mlflow.db
 label_studio/landmarks.png
 
 # Personal working notes (kept local)

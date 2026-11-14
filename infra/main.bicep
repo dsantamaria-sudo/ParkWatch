@@ -288,7 +288,7 @@ resource gpuCluster 'Microsoft.MachineLearningServices/workspaces/computes@2024-
   }
 }
 
-// --- Email alert when a pipeline run fails (block 4) ---
+// --- Email alert when a pipeline run fails ---
 // The Azure ML SDK does not expose email notifications on jobs: Azure Monitor alert on the
 // workspace "Failed Runs" metric, only for the pipeline experiments.
 

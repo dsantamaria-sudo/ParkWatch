@@ -5,7 +5,7 @@ Download the CSV from the run in MLflow (Artifacts -> eval/cv_oof_predictions.cs
   uv run python tools/review_errors.py --csv cv_oof_predictions.csv --spot p05 --kind false-free --sort time
 
 Prints where the errors concentrate (day, UTC hour, image quality, error type) and writes contact
-sheets to data/review/: each error as the network input (--outside / --margin of the run) next to
+sheets to data/review/: each error as the network input (--margin of the run) next to
 the photo around the spot with the aligned polygon, so a wrong label can be told from a model
 mistake. Sorted by confidence (default: the most confident errors first, often wrong labels).
 
@@ -35,7 +35,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ml"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from alignment import IDENTITY, Alignment, align_image, transform_points  # noqa: E402
 from crop_preview import network_input  # noqa: E402
-from crops import spot_polygons  # noqa: E402
 
 KINDS = {"all": None, "false-free": ("occupied", "free"), "false-occupied": ("free", "occupied")}
 
@@ -69,8 +68,7 @@ def main() -> None:
     p.add_argument("--sort", choices=("confidence", "time"), default="confidence")
     p.add_argument("--n", type=int, default=60, help="errors per sheet")
     p.add_argument("--pages", type=int, default=1)
-    p.add_argument("--outside", choices=("keep", "grey"), default="grey", help="as in the run")
-    p.add_argument("--margin", type=float, default=0.0, help="crop_margin of the run")
+    p.add_argument("--margin", type=float, default=0.10, help="crop_margin of the run")
     p.add_argument("--input-size", type=int, default=96)
     p.add_argument("--rois", type=Path, default=Path("label_studio/rois.json"))
     p.add_argument("--out", type=Path, default=Path("data/review"))
@@ -114,12 +112,11 @@ def main() -> None:
     alignment = Alignment(list(csv.DictReader(io.StringIO(content.decode("utf-8")))))
     rois = json.loads(args.rois.read_text(encoding="utf-8"))
     spot = next(s for s in rois["spots"] if s["id"] == args.spot)
-    polygon = spot_polygons(rois)[args.spot]
 
     def render(r: dict) -> tuple[Image.Image, Image.Image]:
         photo = Image.open(io.BytesIO(container.download_blob(r["blob"]).readall())).convert("RGB")
         warp = alignment.warps(r["blob"]).get(args.spot, IDENTITY)
-        net = network_input(align_image(photo, warp), spot["points"], polygon, args.outside, args.margin, args.input_size)
+        net = network_input(align_image(photo, warp), spot["points"], args.margin, args.input_size)
         return net, context_view(photo, spot["points"], warp)
 
     args.out.mkdir(parents=True, exist_ok=True)

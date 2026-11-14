@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import random
 
-from PIL import Image, ImageDraw
+from PIL import Image
 
 STORE_MARGIN = 0.25  # >= largest crop_margin + jitter we expect to try
 LETTERBOX_FILL = (114, 114, 114)
@@ -53,11 +53,10 @@ def clip_box(box: Box, width: int, height: int) -> tuple[int, int, int, int]:
 
 
 def letterbox(image: Image.Image, size: int) -> Image.Image:
-    """Scales the longer side to `size` and centres it on a grey square canvas (no distortion).
-    A mask (mode "L") gets a black (0 = outside the spot) canvas."""
+    """Scales the longer side to `size` and centres it on a grey square canvas (no distortion)."""
     scale = size / max(image.width, image.height)
     w, h = max(1, round(image.width * scale)), max(1, round(image.height * scale))
-    canvas = Image.new(image.mode, (size, size), LETTERBOX_FILL if image.mode == "RGB" else 0)
+    canvas = Image.new("RGB", (size, size), LETTERBOX_FILL)
     canvas.paste(image.resize((w, h), Image.BILINEAR), ((size - w) // 2, (size - h) // 2))
     return canvas
 
@@ -66,25 +65,3 @@ def crop_spot(image: Image.Image, points_pct: list[list[float]], margin: float) 
     """Crop of one spot from the full photo (inference / build_dataset)."""
     box = expand_box(polygon_bbox(points_pct, image.width, image.height), margin)
     return image.crop(clip_box(box, image.width, image.height))
-
-
-# --- Spot polygon: mask as a 4th input channel (B) / grey outside the spot (C) ------------
-# The crops are stored in the reference geometry (every spot already aligned), so the polygon
-# of rois.json, shifted to the stored crop, is exactly the spot inside it.
-
-def spot_polygons(rois: dict) -> dict[str, list[list[float]]]:
-    """{spot: polygon in reference-photo px} (rois.json points are in %)."""
-    w, h = rois["image_size"]
-    return {s["id"]: [[x / 100 * w, y / 100 * h] for x, y in s["points"]] for s in rois["spots"]}
-
-
-def polygon_mask(size: tuple[int, int], points_px: list[list[float]], offset: tuple[float, float] = (0, 0)) -> Image.Image:
-    """Mode "L" image of `size`: 255 inside the polygon (shifted by -offset), 0 outside."""
-    mask = Image.new("L", size, 0)
-    ImageDraw.Draw(mask).polygon([(x - offset[0], y - offset[1]) for x, y in points_px], fill=255)
-    return mask
-
-
-def grey_outside(image: Image.Image, mask: Image.Image) -> Image.Image:
-    """Everything outside the spot painted with the letterbox grey (experiment C)."""
-    return Image.composite(image, Image.new("RGB", image.size, LETTERBOX_FILL), mask)

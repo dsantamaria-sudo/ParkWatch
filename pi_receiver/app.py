@@ -1,4 +1,4 @@
-"""ParkWatch — Phase 1: receiver on the Raspberry Pi.
+"""ParkWatch — receiver on the Raspberry Pi.
 
 ESP32-CAM -> POST /upload (raw photo) -> this service:
   1. Validates the received JPEG.

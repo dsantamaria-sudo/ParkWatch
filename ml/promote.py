@@ -35,9 +35,7 @@ import tracking
 def holdout_metrics(model_dir: Path, data_dir: Path, rows: list[dict], args) -> dict:
     predictor = ParkNetPredictor(model_dir)
     c = predictor.config
-    ds = SpotCrops(data_dir, rows, c["input_size"], c["crop_margin"], c["norm_mean"], c["norm_std"],
-                   polygons=c.get("mask_polygons"), mask_channel=c.get("mask_channel", False),
-                   outside_grey=c.get("outside") == "grey")
+    ds = SpotCrops(data_dir, rows, c["input_size"], c["crop_margin"], c["norm_mean"], c["norm_std"])
     ys, ps = [], []
     for x, y, _ in DataLoader(ds, batch_size=256, num_workers=args.num_workers):
         ps.append(predictor.model(x).argmax(1))

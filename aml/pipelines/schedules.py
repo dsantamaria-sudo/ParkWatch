@@ -1,4 +1,4 @@
-"""ParkWatch — Azure ML schedules that close the loop (block 4), Madrid time.
+"""ParkWatch — Azure ML schedules that close the loop, Madrid time.
 
   parkwatch-training-nightly  02:00 every day except Monday   training (epochs of the last run with CV)
   parkwatch-training-weekly   02:00 on Mondays (Sunday night) full cross-validation, forced

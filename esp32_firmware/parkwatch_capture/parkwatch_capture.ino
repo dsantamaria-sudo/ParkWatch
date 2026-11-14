@@ -1,5 +1,5 @@
 /*
- * ParkWatch — Phase 1: capture firmware (ESP32-CAM -> Pi)
+ * ParkWatch — capture firmware (ESP32-CAM -> Pi)
  *
  * The ESP32 knows nothing about schedules or light: it captures non-stop every
  * CAPTURE_INTERVAL_MS and POSTs the JPEG to a local HTTP endpoint on the

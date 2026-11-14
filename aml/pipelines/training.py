@@ -15,11 +15,11 @@ Usage (from the repo root, with az login):
   uv run python aml/pipelines/training.py --run-cv         # full cross-validation
   uv run python aml/pipelines/training.py --force          # rebuild even if the fingerprint did not change
   uv run python aml/pipelines/training.py --experiment crop0 --crop-margin 0.0   # experiment
-  uv run python aml/pipelines/training.py --experiment mask --mask-channel        # experiment B
-  uv run python aml/pipelines/training.py --experiment grey --outside grey        # experiment C
+  uv run python aml/pipelines/training.py --experiment no-new-days --final-epochs 37 --exclude-days 2026-11-09
 
 --experiment NAME: only `train` (GPU), on the latest registered dataset (no rebuild), always with
-cross-validation, holdout kept out of training but NOT evaluated, no registration/promotion.
+cross-validation (or exactly --final-epochs), holdout kept out of training but NOT evaluated, no
+registration/promotion.
 Experiments are compared on the cross-validation in MLflow (tag `experiment` = NAME); the
 holdout is only used once, to promote the winner.
 """
@@ -63,9 +63,8 @@ HOLDOUT_DAYS: list[str] = ["2026-10-23", "2026-11-03", "2026-11-11", "2026-11-12
 # jitter 0.05: 0.978 (experiment keep10_jit05_v21).
 CROP_MARGIN = 0.10
 JITTER = 0.05
-OUTSIDE = "keep"
 
-# Maximum time per step (block 4), in seconds.
+# Maximum time per step, in seconds.
 TIMEOUT_DATASET = 60 * 60
 TIMEOUT_ALIGN = 2 * 60 * 60  # the first run measures every photo since 16/10
 TIMEOUT_TRAIN = 3 * 60 * 60
@@ -112,8 +111,7 @@ def build_pipeline(client_id: str):
 
     @pipeline(name="parkwatch_training", default_compute="cpu-cluster")
     def training(rois: Input, force: bool = False, run_cv: bool = False,
-                 crop_margin: float = CROP_MARGIN, jitter: float = JITTER, width: float = 1.0,
-                 outside: str = OUTSIDE):
+                 crop_margin: float = CROP_MARGIN, jitter: float = JITTER, width: float = 1.0):
         align = align_step(align_photos, rois, client_id)
         align.outputs.alignment.name = ALIGNMENT_ASSET  # a new version of the table every night
         alert = drift_alert(alignment=align.outputs.alignment)
@@ -134,7 +132,7 @@ def build_pipeline(client_id: str):
         holdout = {"holdout_days": " ".join(HOLDOUT_DAYS)} if HOLDOUT_DAYS else {}
         fit = train(
             dataset=build.outputs.dataset, run_cv=run_cv,
-            crop_margin=crop_margin, jitter=jitter, width=width, outside=outside, rois=rois,
+            crop_margin=crop_margin, jitter=jitter, width=width,
             mlflow_url=MLFLOW_URL, keyvault_url=KEYVAULT_URL, **holdout,
         )
         fit.compute = "gpu-cluster"
@@ -153,26 +151,23 @@ def build_pipeline(client_id: str):
     return training
 
 
-def build_experiment(client_id: str, final_epochs: int | None = None, holdout_eval: bool = False,
-                     exclude_days: list[str] | None = None):
+def build_experiment(client_id: str, final_epochs: int | None = None, exclude_days: list[str] | None = None):
     """Pipeline of one experiment: train with CV on a fixed dataset, nothing registered.
 
     final_epochs: no CV, the final model trains exactly that many epochs (e.g. to reproduce a
-    production run). holdout_eval: also evaluate the holdout of that dataset (diagnostics only;
-    experiments are compared on the CV)."""
+    production run). exclude_days: days left out of training (e.g. to test whether they hurt)."""
     train = load_component(COMPONENTS / "train.yml")
     fixed = {"run_cv": False, "final_epochs": final_epochs} if final_epochs else {"run_cv": True}
     if exclude_days:
         fixed["exclude_days"] = " ".join(exclude_days)
 
     @pipeline(name="parkwatch_experiment", default_compute="gpu-cluster")
-    def experiment(dataset: Input, rois: Input, note: str, crop_margin: float = CROP_MARGIN, jitter: float = JITTER,
-                   width: float = 1.0, input_size: int = 96, mask_channel: bool = False, outside: str = OUTSIDE,
-                   epochs: int = 40):
+    def experiment(dataset: Input, note: str, crop_margin: float = CROP_MARGIN, jitter: float = JITTER,
+                   width: float = 1.0, input_size: int = 96, epochs: int = 40):
         holdout = {"holdout_days": " ".join(HOLDOUT_DAYS)} if HOLDOUT_DAYS else {}
         fit = train(
             dataset=dataset, crop_margin=crop_margin, jitter=jitter, width=width, input_size=input_size,
-            mask_channel=mask_channel, outside=outside, rois=rois, epochs=epochs, holdout_eval=holdout_eval, note=note, **fixed,
+            epochs=epochs, holdout_eval=False, note=note, **fixed,
             mlflow_url=MLFLOW_URL, keyvault_url=KEYVAULT_URL, **holdout,
         )
         fit.environment_variables = {"AZURE_CLIENT_ID": client_id, "PYTHONUNBUFFERED": "1"}
@@ -185,19 +180,15 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--force", action="store_true", help="rebuild even if the fingerprint did not change")
     p.add_argument("--run-cv", action="store_true", help="full cross-validation (default: epochs of the last run with CV)")
-    # Hyperparameters to compare in MLflow (block 2); the defaults are those of the base model.
+    # Hyperparameters to compare in MLflow; the defaults are the production ones.
     p.add_argument("--crop-margin", type=float, default=CROP_MARGIN, help="crop margin around the polygon bbox")
     p.add_argument("--jitter", type=float, default=JITTER, help="+-fraction of crop shift/scale (training only)")
     p.add_argument("--width", type=float, default=1.0, help="ParkNet filter multiplier")
     p.add_argument("--input-size", type=int, default=96, help="input side in px (experiments only)")
-    p.add_argument("--mask-channel", action="store_true", help="spot mask as a 4th input channel (experiments only, B)")
-    p.add_argument("--outside", choices=("keep", "grey"), default=OUTSIDE,
-                   help="grey = paint everything outside the spot polygon grey (experiment C)")
     p.add_argument("--epochs", type=int, default=40, help="maximum epochs of the CV (experiments only)")
     p.add_argument("--experiment", metavar="NAME", help="experiment: train with CV on the latest dataset, no promotion")
     p.add_argument("--dataset-version", help="experiments: version of the dataset asset (default: the latest)")
     p.add_argument("--final-epochs", type=int, help="experiments: no CV, train the final model exactly N epochs")
-    p.add_argument("--holdout-eval", action="store_true", help="experiments: also evaluate the holdout (diagnostics)")
     p.add_argument("--exclude-days", nargs="*", default=[], help="experiments: YYYY-MM-DD left out of training")
     args = p.parse_args()
 
@@ -206,13 +197,10 @@ def main() -> None:
         # the SDK does not resolve name@latest for pipeline inputs: the version is looked up here
         version = args.dataset_version or client.data.get(DATASET_ASSET, label="latest").version
         print(f"Dataset {DATASET_ASSET}:{version}")
-        job = build_experiment(cluster_client_id(client, "cpu-cluster"), args.final_epochs, args.holdout_eval,
-                               args.exclude_days)(
+        job = build_experiment(cluster_client_id(client, "cpu-cluster"), args.final_epochs, args.exclude_days)(
             dataset=Input(type="uri_folder", path=f"azureml:{DATASET_ASSET}:{version}"),
-            rois=Input(type="uri_file", path=str(ROIS)),
             note=args.experiment, crop_margin=args.crop_margin, jitter=args.jitter,
-            width=args.width, input_size=args.input_size, mask_channel=args.mask_channel,
-            outside=args.outside, epochs=args.epochs,
+            width=args.width, input_size=args.input_size, epochs=args.epochs,
         )
         job = client.jobs.create_or_update(configure(job, "parkwatch-experiments"))
         print(f"Experiment {args.experiment} submitted: {job.name}\n  {job.studio_url}")
@@ -226,7 +214,6 @@ def main() -> None:
         crop_margin=args.crop_margin,
         jitter=args.jitter,
         width=args.width,
-        outside=args.outside,
     )
     job = client.jobs.create_or_update(configure(job, "parkwatch-training"))
     print(f"Pipeline submitted: {job.name}\n  {job.studio_url}")

@@ -40,7 +40,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "ml"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from alignment import IDENTITY, Alignment, align_image, transform_points  # noqa: E402
 from crop_preview import network_input  # noqa: E402
-from crops import spot_polygons  # noqa: E402
 
 REFERENCE, UNCORRECTED, CURRENT = "#ffd60a", "#ff453a", "#30d158"
 OUTLINE = [pe.withStroke(linewidth=3, foreground="black")]
@@ -63,7 +62,6 @@ def model_input(photo: Image.Image, rois: dict, warps: dict, margin: float, size
     moved = {s["id"]: np.array([[x / 100 * w, y / 100 * h] for x, y in
                                 transform_points(s["points"], warps.get(s["id"], IDENTITY), (w, h))])
              for s in rois["spots"]}
-    polygons = spot_polygons(rois)
     fig = plt.figure(figsize=(15.5, 4.3))
     grid = fig.add_gridspec(1, 1 + len(ids), width_ratios=[3.1] + [1] * len(ids), wspace=0.06)
     ax = fig.add_subplot(grid[0])
@@ -79,7 +77,7 @@ def model_input(photo: Image.Image, rois: dict, warps: dict, margin: float, size
     for k, s in enumerate(rois["spots"], 1):
         ax = fig.add_subplot(grid[k])
         aligned = align_image(photo, warps.get(s["id"], IDENTITY))
-        ax.imshow(network_input(aligned, s["points"], polygons[s["id"]], "keep", margin, size), interpolation="nearest")
+        ax.imshow(network_input(aligned, s["points"], margin, size), interpolation="nearest")
         ax.set_title(s["id"], fontsize=12)
         ax.set_xticks([]), ax.set_yticks([])
     fig.suptitle(f"What the model sees: one {size}×{size} crop per spot", fontsize=13, y=0.98)
@@ -228,7 +226,7 @@ def main() -> None:
     print(f"figure -> {args.out / 'landmark_alignment.png'}")
     spot = next(s for s in rois["spots"] if s["id"] == args.example_spot)
     crop = network_input(align_image(photo, warps.get(spot["id"], IDENTITY)), spot["points"],
-                         spot_polygons(rois)[spot["id"]], "keep", args.crop_margin, args.input_size)
+                         args.crop_margin, args.input_size)
     parknet_architecture(crop, args.input_size, args.out / "parknet.png")
     print(f"figure -> {args.out / 'parknet.png'}")
 

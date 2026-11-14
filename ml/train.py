@@ -19,8 +19,6 @@ Usage:
   python train.py --data-dir <dataset> --output-dir outputs
   python train.py --data-dir <dataset> --holdout-days 2026-10-19 2026-10-22 --jitter 0.05
   python train.py --data-dir <dataset> --mlflow-url https://<app> --keyvault-url https://<vault>
-  python train.py --data-dir <dataset> --mask-channel true --rois rois.json   # experiment B
-  python train.py --data-dir <dataset> --outside grey --rois rois.json        # experiment C
 """
 from __future__ import annotations
 
@@ -38,7 +36,6 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
-from crops import spot_polygons
 from data import CLASSES, SpotCrops, channel_stats, read_manifest
 from metrics import evaluate
 from parknet import ParkNet, count_parameters
@@ -68,11 +65,6 @@ def parse_args():
     p.add_argument("--jitter", type=float, default=0.0, help="+-fraction of crop shift/scale (training only)")
     p.add_argument("--no-color-aug", action="store_true")
     p.add_argument("--no-hflip", action="store_true")
-    # experiments B and C: they use the spot polygon; need the dataset's rois.json
-    p.add_argument("--mask-channel", default="false", help="true = the spot polygon goes in as a 4th channel (B)")
-    p.add_argument("--outside", choices=("keep", "grey"), default="keep",
-                   help="grey = everything outside the spot polygon painted grey (C)")
-    p.add_argument("--rois", type=Path, default=None, help="rois.json of the dataset (with --mask-channel / --outside grey)")
     # training
     p.add_argument("--epochs", type=int, default=40, help="maximum; cross-validation picks how many to use")
     p.add_argument("--final-epochs", type=int, default=None, help="forces the epochs of the final model (skips the CV choice)")
@@ -102,27 +94,6 @@ def is_false(value: str) -> bool:
     return str(value).strip().lower() in ("false", "0", "no")
 
 
-def in_channels(args) -> int:
-    return 4 if args.mask else 3
-
-
-def spot_options(args) -> dict:
-    """SpotCrops options of experiments B/C."""
-    return {"polygons": args.polygons, "mask_channel": args.mask, "outside_grey": args.outside == "grey"}
-
-
-def mask_polygons(args, info: dict) -> dict | None:
-    """Spot polygons for B/C (None = not used). Same ROIs as the dataset, or it fails."""
-    if not args.mask and args.outside == "keep":
-        return None
-    if args.rois is None:
-        sys.exit("--mask-channel / --outside grey need --rois (the rois.json the dataset was built with)")
-    rois = json.loads(args.rois.read_text(encoding="utf-8"))
-    if rois["version"] != info["rois_version"]:
-        sys.exit(f"--rois {rois['version']} != dataset ROIs {info['rois_version']}")
-    return spot_polygons(rois)
-
-
 def seed_everything(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
@@ -150,7 +121,6 @@ class Trainer:
         return SpotCrops(
             a.data_dir, rows, a.input_size, a.crop_margin, mean, std,
             augment=train, jitter=a.jitter, color_aug=not a.no_color_aug, hflip=not a.no_hflip,
-            **spot_options(a),
         )
 
     def loader(self, ds: SpotCrops, shuffle: bool) -> DataLoader:
@@ -163,7 +133,7 @@ class Trainer:
     def build(self, train_rows):
         """New model + class-weighted loss + optimiser and LR schedule."""
         a = self.args
-        model = ParkNet(len(CLASSES), a.width, a.dropout, in_channels(a)).to(self.device)
+        model = ParkNet(len(CLASSES), a.width, a.dropout).to(self.device)
         counts = Counter(r["label"] for r in train_rows)
         weights = torch.tensor(
             [len(train_rows) / (len(CLASSES) * max(1, counts[c])) for c in CLASSES], dtype=torch.float32, device=self.device
@@ -220,7 +190,7 @@ def cross_validate(trainer: Trainer, dev_rows, folds, mlflow) -> tuple[int, np.n
         va = [r for r in dev_rows if r["day"] in val_days]
         if not has_both_classes(va):
             print(f"  warning: fold {k} ({val_days}) does not have both classes in validation; its macro F1 is biased")
-        mean, std = channel_stats(a.data_dir, tr, a.input_size, a.crop_margin, seed=a.seed, **spot_options(a))
+        mean, std = channel_stats(a.data_dir, tr, a.input_size, a.crop_margin, seed=a.seed)
         tr_dl = trainer.loader(trainer.dataset(tr, mean, std, train=True), shuffle=True)
         va_ds = trainer.dataset(va, mean, std, train=False)
         va_dl = trainer.loader(va_ds, shuffle=False)
@@ -262,7 +232,7 @@ def log_oof_report(trainer: Trainer, oof, epochs: int, mlflow) -> dict:
     mlflow.log_metrics(flat_metrics("cv_oof", m))
     mlflow.log_figure(confusion_figure(m["confusion_matrix"], CLASSES), "eval/cv_oof_confusion.png")
     mlflow.log_text(predictions_csv(rows, y, pred, prob, fold), "eval/cv_oof_predictions.csv")
-    ds = SpotCrops(a.data_dir, rows, a.input_size, a.crop_margin, **spot_options(a))
+    ds = SpotCrops(a.data_dir, rows, a.input_size, a.crop_margin)
     fig = errors_figure(ds, m)
     if fig is not None:
         mlflow.log_figure(fig, "eval/cv_oof_errors.png")
@@ -367,8 +337,6 @@ def main():
 
     rows = read_manifest(args.data_dir)
     info = json.loads((args.data_dir / "dataset_info.json").read_text(encoding="utf-8"))
-    args.mask = not is_false(args.mask_channel)
-    args.polygons = mask_polygons(args, info)
     holdout_days = set(args.holdout_days)
     unknown = holdout_days - {r["day"] for r in rows}
     if unknown:
@@ -397,11 +365,11 @@ def main():
         if self_hosted and tracking.AZUREML_RUN_ID:
             mlflow.set_tag(tracking.TAG_AZURE_TRAIN_RUN, tracking.AZUREML_RUN_ID)
         tracking.link_azureml_run(run)
-        n_params = count_parameters(ParkNet(len(CLASSES), args.width, args.dropout, in_channels(args)))
+        n_params = count_parameters(ParkNet(len(CLASSES), args.width, args.dropout))
         mlflow.log_params(
             {
                 # final_epochs is logged at the end with the value used (MLflow does not allow changing a param)
-                **{k: (str(v) if isinstance(v, Path) else v) for k, v in vars(args).items() if k not in ("holdout_days", "final_epochs", "mlflow_url", "keyvault_url", "polygons", "mask")},
+                **{k: (str(v) if isinstance(v, Path) else v) for k, v in vars(args).items() if k not in ("holdout_days", "final_epochs", "mlflow_url", "keyvault_url")},
                 "final_epochs_forced": args.final_epochs or "none",
                 "arch": "parknet",
                 "n_params": n_params,
@@ -444,7 +412,7 @@ def main():
         mlflow.log_param("final_epochs", best_epochs)
 
         # 4. Final model on all development days
-        mean, std = channel_stats(args.data_dir, dev, args.input_size, args.crop_margin, seed=args.seed, **spot_options(args))
+        mean, std = channel_stats(args.data_dir, dev, args.input_size, args.crop_margin, seed=args.seed)
         dl = trainer.loader(trainer.dataset(dev, mean, std, train=True), shuffle=True)
         model, loss_fn, opt, sched, class_weights = trainer.build(dev)
         mlflow.log_params({"norm_mean": list(mean), "norm_std": list(std), "class_weights": [round(w, 3) for w in class_weights]})
@@ -480,10 +448,6 @@ def main():
             "dropout": args.dropout,
             "input_size": args.input_size,
             "crop_margin": args.crop_margin,
-            # experiments B/C: the model carries the polygons it was trained with
-            "mask_channel": args.mask,
-            "outside": args.outside,
-            **({"mask_polygons": args.polygons} if args.polygons else {}),
             "norm_mean": list(mean),
             "norm_std": list(std),
             "rois_version": info["rois_version"],

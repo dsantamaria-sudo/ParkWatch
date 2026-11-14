@@ -23,7 +23,7 @@ from azure.identity import DefaultAzureCredential
 from training import (COMPONENTS, KEYVAULT_URL, LS_PROJECT, LS_URL, RESOURCE_GROUP, ROIS, SUBSCRIPTION,
                       WORKSPACE, align_step, cluster_client_id, configure)
 
-TIMEOUT_INFERENCE = 30 * 60  # block 4
+TIMEOUT_INFERENCE = 30 * 60  # seconds
 
 
 def build_pipeline(client_id: str, days: list[str]):
