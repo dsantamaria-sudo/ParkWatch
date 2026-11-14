@@ -11,7 +11,7 @@ own run (MLFLOW_RUN_ID). use_self_hosted() keeps both values (AZUREML_URI, AZURE
 switches the global MLflow to the self-hosted server. If the server cannot be reached the job
 stays on Azure ML: the training never fails because of the tracking server.
 
-This module also fixes the run layout, shared with tools/import_mlflow_history.py.
+This module also fixes the run layout (run names and the tags that pair train and promote).
 """
 from __future__ import annotations
 

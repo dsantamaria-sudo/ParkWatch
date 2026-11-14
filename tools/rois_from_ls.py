@@ -103,7 +103,7 @@ def main() -> None:
     args = parser.parse_args()
 
     task, annotation = pick_annotation(json.loads(args.export.read_text(encoding="utf-8")))
-    # spots only: `static` polygons (background used to measure drift) go to static_from_ls.py
+    # spots only: other labels of older exports (`static`, the first drift method) are ignored
     regions = [r for r in annotation["result"]
                if r.get("type") == "polygonlabels" and r["value"].get("polygonlabels", ["spot"])[0] == "spot"]
     if not regions:

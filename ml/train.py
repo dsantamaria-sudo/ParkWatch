@@ -1,6 +1,6 @@
 """ParkWatch — trains ParkNet (CNN from scratch) with day-grouped cross-validation.
 
-Flow (plan.md, Phase 3):
+Flow:
   1. Holdout days (--holdout-days) are kept out; the rest are development days.
   2. Cross-validation grouped by day (--folds): each fold is trained for --epochs epochs and
      its validation macro F1 is measured after every epoch.
@@ -68,7 +68,7 @@ def parse_args():
     p.add_argument("--jitter", type=float, default=0.0, help="+-fraction of crop shift/scale (training only)")
     p.add_argument("--no-color-aug", action="store_true")
     p.add_argument("--no-hflip", action="store_true")
-    # experiments B and C (plan.md block 8): they use the spot polygon; need the dataset's rois.json
+    # experiments B and C: they use the spot polygon; need the dataset's rois.json
     p.add_argument("--mask-channel", default="false", help="true = the spot polygon goes in as a 4th channel (B)")
     p.add_argument("--outside", choices=("keep", "grey"), default="keep",
                    help="grey = everything outside the spot polygon painted grey (C)")
@@ -467,7 +467,7 @@ def main():
                 mlflow.log_figure(fig, "eval/holdout_errors.png")
             print(f"Holdout: macro F1 {m['f1_macro']:.4f} | acc {m['acc']:.4f}")
         else:
-            print("No holdout: no promotion metric (plan.md: it is fixed once data collection ends)")
+            print("No holdout: no promotion metric")
 
         # Artifacts: weights + everything needed to reproduce the preprocessing at inference time
         model_dir = args.output_dir / "model"

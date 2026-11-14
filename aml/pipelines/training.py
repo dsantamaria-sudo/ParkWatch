@@ -21,7 +21,7 @@ Usage (from the repo root, with az login):
 --experiment NAME: only `train` (GPU), on the latest registered dataset (no rebuild), always with
 cross-validation, holdout kept out of training but NOT evaluated, no registration/promotion.
 Experiments are compared on the cross-validation in MLflow (tag `experiment` = NAME); the
-holdout is only used once, to promote the winner (plan.md, block 8).
+holdout is only used once, to promote the winner.
 """
 # No `from __future__ import annotations`: @pipeline reads the annotations (Input, bool) as types.
 import argparse
@@ -48,11 +48,11 @@ KEYVAULT_URL = "https://parkwatch-keyvault.vault.azure.net"
 MLFLOW_URL = "https://parkwatch-mlflow.proudcliff-6d0c960a.spaincentral.azurecontainerapps.io"
 DATASET_ASSET = "parkwatch-crops"
 ALIGNMENT_ASSET = "parkwatch-alignment"
-# Fixed, whole days chosen by hand (plan.md block 1): a day that goes in never comes out.
+# Fixed, whole days chosen by hand: a day that goes in never comes out.
 # 23/10: the most varied day. 3/11: reserved before labelling (no model has seen it), with the
 # camera moved, so that the holdout also measures robustness to drift. 11/11 and 12/11: added
 # before any of their photos was labelled, so that one rare episode (the large van of 23/10 on
-# p04/p05) weighs less in the promotion (plan.md, block 8).
+# p04/p05) weighs less in the promotion.
 HOLDOUT_DAYS: list[str] = ["2026-10-23", "2026-11-03", "2026-11-11", "2026-11-12"]
 
 # Production crop configuration (also the defaults of the nightly/weekly schedules and of the
@@ -60,7 +60,7 @@ HOLDOUT_DAYS: list[str] = ["2026-10-23", "2026-11-03", "2026-11-11", "2026-11-12
 # JITTER 0.05 since 13/11: the alignment table tracked again (TRACKING_VERSION 2) gives more
 # consistent crops, and without jitter the models trained on it generalised worse than the
 # champion trained on the old, noisier table (holdout macro F1 0.966 vs 0.977). Same data with
-# jitter 0.05: 0.978 (experiment keep10_jit05_v21, plan.md block 8).
+# jitter 0.05: 0.978 (experiment keep10_jit05_v21).
 CROP_MARGIN = 0.10
 JITTER = 0.05
 OUTSIDE = "keep"

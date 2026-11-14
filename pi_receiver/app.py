@@ -30,8 +30,8 @@ from PIL import Image
 load_dotenv()
 
 # --- Configuration (environment variables, see .env.example) -------------
-LAT = float(os.getenv("PW_LAT", "42.9268"))   # Zubiri, Navarre by default
-LON = float(os.getenv("PW_LON", "-1.5178"))
+LAT = float(os.getenv("PW_LAT", "40.4168"))   # placeholder (Madrid): set the real one in .env
+LON = float(os.getenv("PW_LON", "-3.7038"))
 TZ = ZoneInfo(os.getenv("PW_TZ", "Europe/Madrid"))
 MARGIN_MIN = int(os.getenv("PW_MARGIN_MIN", "15"))
 

@@ -6,7 +6,7 @@
        each with its own crop and normalisation (model_config.json).
     3. If there is no champion, or the new macro F1 is >= the champion's, it is promoted.
 
-Without holdout days there is no promotion (plan.md, block 1): the model is only registered.
+Without holdout days there is no promotion: the model is only registered.
 
 Tracking: if train logged to the self-hosted MLflow (model_config.json), promote completes that
 same run (params prefixed "promote/", metrics new/* and champion/*, tags parknet_version and
@@ -103,7 +103,7 @@ def main() -> None:
         if not holdout:
             mlflow.log_param(prefix + "decision", "no_holdout")
             mlflow.set_tag(tracking.TAG_DECISION, "no_holdout")
-            print("No holdout: no promotion (plan.md, block 1)")
+            print("No holdout: no promotion")
             return
         mlflow.log_metrics({f"new/{k}": v for k, v in new_m.items() if isinstance(v, (int, float))})
         print(f"New {MODEL_NAME}:{new.version}: holdout macro F1 {new_m['f1_macro']:.4f} ({len(holdout)} crops)")

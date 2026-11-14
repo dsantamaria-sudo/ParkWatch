@@ -1,12 +1,16 @@
 @echo off
+rem Copies the receiver to the Raspberry Pi and installs its environment. Set before running:
+rem   PW_PI_HOST  user@host of the Pi        PW_PI_KEY  path to the SSH private key
 setlocal
-set KEY=C:\Users\Usuario\Desktop\servers\Raspberry\Raspberry2\keys\id_ed25519
-set HOST=dsantamaria@100.78.53.106
+if "%PW_PI_HOST%"=="" (echo Set PW_PI_HOST=user@host of the Raspberry Pi & exit /b 1)
+if "%PW_PI_KEY%"=="" (echo Set PW_PI_KEY=path to the SSH private key & exit /b 1)
+set KEY=%PW_PI_KEY%
+set HOST=%PW_PI_HOST%
 set SSH=ssh -i "%KEY%" -o StrictHostKeyChecking=accept-new %HOST%
 
 echo === 1/5: copying pi_receiver again (includes requirements.txt) ===
 rem individual files: "scp -r folder" nests pi_receiver/ inside if the destination already exists
-set SRC=C:\Users\Usuario\Desktop\OtherProjects\exit\ParkWatch\pi_receiver
+set SRC=%~dp0.
 %SSH% "mkdir -p ~/parkwatch_receiver"
 if %ERRORLEVEL% NEQ 0 goto :fail
 scp -i "%KEY%" -o StrictHostKeyChecking=accept-new "%SRC%\app.py" "%SRC%\requirements.txt" "%SRC%\.env" "%SRC%\.env.example" %HOST%:~/parkwatch_receiver/

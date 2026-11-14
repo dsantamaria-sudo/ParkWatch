@@ -5,7 +5,7 @@
     -> <out>/manifest.csv               one row per crop (see COLUMNS)
     -> <out>/dataset_info.json          fingerprint, ROI version, counts, skipped items
 
-Rules (plan.md, Phase 3 / block 1):
+Rules:
   - From each task, the latest non-cancelled annotation; `exclude` is left out.
   - Geometry ALWAYS from rois.json; only the label is read from the annotation.
   - Every labelled photo goes in (also dark/washed-out ones); brightness and contrast of the

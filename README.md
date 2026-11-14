@@ -164,7 +164,6 @@ The current champion gets **98.6 % of the spots right** (macro F1 0.984).
 | `label_studio/` | The labelling setup and the polygons of the spots |
 | `tools/` | Scripts I run on my laptop: reviewing errors, previewing crops, creating anchor tasks, the README figures |
 | `docs/images/` | The images of this README |
-| `plan.md` | My decision log: what I tried, what worked and why I chose each thing |
 
 To launch the pipelines by hand, from the repo root and after `az login`:
 

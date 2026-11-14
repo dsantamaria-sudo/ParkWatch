@@ -2,15 +2,11 @@
   ParkWatch - ROI definition (run once on the reference image after the camera
   is fixed). Draw one polygon per parking spot; the export is converted into
   rois.json (tools/rois_from_ls.py).
-  `static`: background regions that never change (building facades), used to
-  measure and correct camera drift; converted into static_mask.json
-  (tools/static_from_ls.py).
 -->
 <View>
-  <Header value="Spots: one polygon per parking spot. Static: background that never changes (facades), no sky, glass or cars."/>
+  <Header value="One polygon per parking spot."/>
   <Image name="image" value="$image" zoom="true" zoomControl="true"/>
   <PolygonLabels name="roi" toName="image" strokeWidth="2" opacity="0.3" pointSize="small">
     <Label value="spot" background="#3498db" hotkey="1"/>
-    <Label value="static" background="#2ecc71" hotkey="2"/>
   </PolygonLabels>
 </View>
