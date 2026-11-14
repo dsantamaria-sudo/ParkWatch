@@ -56,11 +56,13 @@ ALIGNMENT_ASSET = "parkwatch-alignment"
 HOLDOUT_DAYS: list[str] = ["2026-10-23", "2026-11-03", "2026-11-11", "2026-11-12"]
 
 # Production crop configuration (also the defaults of the nightly/weekly schedules and of the
-# experiments): the champion's. grey0_jit05 (outside grey, margin 0, jitter 0.05) won the CV but
-# was rejected on the holdout on 9/11 (macro F1 0.959 vs 0.963), so production stays here.
-# Changing it changes what the next scheduled run trains and promotes.
+# experiments). Changing it changes what the next scheduled run trains and promotes.
+# JITTER 0.05 since 13/11: the alignment table tracked again (TRACKING_VERSION 2) gives more
+# consistent crops, and without jitter the models trained on it generalised worse than the
+# champion trained on the old, noisier table (holdout macro F1 0.966 vs 0.977). Same data with
+# jitter 0.05: 0.978 (experiment keep10_jit05_v21, plan.md block 8).
 CROP_MARGIN = 0.10
-JITTER = 0.0
+JITTER = 0.05
 OUTSIDE = "keep"
 
 # Maximum time per step (block 4), in seconds.
@@ -151,9 +153,17 @@ def build_pipeline(client_id: str):
     return training
 
 
-def build_experiment(client_id: str):
-    """Pipeline of one experiment: train with CV on a fixed dataset, nothing registered."""
+def build_experiment(client_id: str, final_epochs: int | None = None, holdout_eval: bool = False,
+                     exclude_days: list[str] | None = None):
+    """Pipeline of one experiment: train with CV on a fixed dataset, nothing registered.
+
+    final_epochs: no CV, the final model trains exactly that many epochs (e.g. to reproduce a
+    production run). holdout_eval: also evaluate the holdout of that dataset (diagnostics only;
+    experiments are compared on the CV)."""
     train = load_component(COMPONENTS / "train.yml")
+    fixed = {"run_cv": False, "final_epochs": final_epochs} if final_epochs else {"run_cv": True}
+    if exclude_days:
+        fixed["exclude_days"] = " ".join(exclude_days)
 
     @pipeline(name="parkwatch_experiment", default_compute="gpu-cluster")
     def experiment(dataset: Input, rois: Input, note: str, crop_margin: float = CROP_MARGIN, jitter: float = JITTER,
@@ -161,8 +171,8 @@ def build_experiment(client_id: str):
                    epochs: int = 40):
         holdout = {"holdout_days": " ".join(HOLDOUT_DAYS)} if HOLDOUT_DAYS else {}
         fit = train(
-            dataset=dataset, run_cv=True, crop_margin=crop_margin, jitter=jitter, width=width,
-            input_size=input_size, mask_channel=mask_channel, outside=outside, rois=rois, epochs=epochs, holdout_eval=False, note=note,
+            dataset=dataset, crop_margin=crop_margin, jitter=jitter, width=width, input_size=input_size,
+            mask_channel=mask_channel, outside=outside, rois=rois, epochs=epochs, holdout_eval=holdout_eval, note=note, **fixed,
             mlflow_url=MLFLOW_URL, keyvault_url=KEYVAULT_URL, **holdout,
         )
         fit.environment_variables = {"AZURE_CLIENT_ID": client_id, "PYTHONUNBUFFERED": "1"}
@@ -186,6 +196,9 @@ def main() -> None:
     p.add_argument("--epochs", type=int, default=40, help="maximum epochs of the CV (experiments only)")
     p.add_argument("--experiment", metavar="NAME", help="experiment: train with CV on the latest dataset, no promotion")
     p.add_argument("--dataset-version", help="experiments: version of the dataset asset (default: the latest)")
+    p.add_argument("--final-epochs", type=int, help="experiments: no CV, train the final model exactly N epochs")
+    p.add_argument("--holdout-eval", action="store_true", help="experiments: also evaluate the holdout (diagnostics)")
+    p.add_argument("--exclude-days", nargs="*", default=[], help="experiments: YYYY-MM-DD left out of training")
     args = p.parse_args()
 
     client = MLClient(DefaultAzureCredential(), SUBSCRIPTION, RESOURCE_GROUP, WORKSPACE)
@@ -193,7 +206,8 @@ def main() -> None:
         # the SDK does not resolve name@latest for pipeline inputs: the version is looked up here
         version = args.dataset_version or client.data.get(DATASET_ASSET, label="latest").version
         print(f"Dataset {DATASET_ASSET}:{version}")
-        job = build_experiment(cluster_client_id(client, "cpu-cluster"))(
+        job = build_experiment(cluster_client_id(client, "cpu-cluster"), args.final_epochs, args.holdout_eval,
+                               args.exclude_days)(
             dataset=Input(type="uri_folder", path=f"azureml:{DATASET_ASSET}:{version}"),
             rois=Input(type="uri_file", path=str(ROIS)),
             note=args.experiment, crop_margin=args.crop_margin, jitter=args.jitter,

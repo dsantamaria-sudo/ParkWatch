@@ -15,6 +15,9 @@ inputs:
   holdout_days:
     type: string
     optional: true  # "YYYY-MM-DD YYYY-MM-DD"; no value = no holdout yet
+  exclude_days:
+    type: string
+    optional: true  # "YYYY-MM-DD ..." left out of training (experiments)
   holdout_eval:
     type: boolean
     default: true  # false (experiments): holdout kept out of training but not evaluated
@@ -24,6 +27,9 @@ inputs:
   epochs:
     type: integer
     default: 40
+  final_epochs:
+    type: integer
+    optional: true  # forces the epochs of the final model; with run_cv false, no CV at all
   width:
     type: number
     default: 1.0
@@ -57,10 +63,10 @@ outputs:
 command: >-
   python train.py
   --data-dir ${{inputs.dataset}} --output-dir ${{outputs.model}}
-  --run-cv ${{inputs.run_cv}} --epochs ${{inputs.epochs}}
+  --run-cv ${{inputs.run_cv}} --epochs ${{inputs.epochs}} $[[--final-epochs ${{inputs.final_epochs}}]]
   --width ${{inputs.width}} --input-size ${{inputs.input_size}}
   --crop-margin ${{inputs.crop_margin}} --jitter ${{inputs.jitter}}
   --mask-channel ${{inputs.mask_channel}} --outside ${{inputs.outside}} $[[--rois ${{inputs.rois}}]]
-  $[[--holdout-days ${{inputs.holdout_days}}]] --holdout-eval ${{inputs.holdout_eval}}
+  $[[--holdout-days ${{inputs.holdout_days}}]] $[[--exclude-days ${{inputs.exclude_days}}]] --holdout-eval ${{inputs.holdout_eval}}
   $[[--note ${{inputs.note}}]]
   $[[--mlflow-url ${{inputs.mlflow_url}}]] $[[--keyvault-url ${{inputs.keyvault_url}}]]

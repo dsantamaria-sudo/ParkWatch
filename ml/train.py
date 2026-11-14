@@ -53,6 +53,7 @@ def parse_args():
     p.add_argument("--data-dir", type=Path, required=True)
     p.add_argument("--output-dir", type=Path, default=Path("outputs"))
     p.add_argument("--holdout-days", nargs="*", default=[], help="YYYY-MM-DD; empty = no holdout yet")
+    p.add_argument("--exclude-days", nargs="*", default=[], help="YYYY-MM-DD left out of training (experiments)")
     p.add_argument("--holdout-eval", default="true",
                    help="false = the holdout days are kept out of training but not evaluated (experiments: "
                         "they are compared on the cross-validation, the holdout is only used to promote)")
@@ -373,7 +374,10 @@ def main():
     if unknown:
         # a day reserved for the holdout before it is labelled (so that no model ever sees it)
         print(f"warning: holdout days without labels in the dataset yet: {sorted(unknown)}")
-    dev = [r for r in rows if r["day"] not in holdout_days]
+    excluded = set(args.exclude_days)  # experiments: days left out of training (and not evaluated)
+    dev = [r for r in rows if r["day"] not in holdout_days and r["day"] not in excluded]
+    if excluded:
+        print(f"Excluded from training: {sorted(excluded)}")
     holdout = [r for r in rows if r["day"] in holdout_days]
     dev_days = sorted({r["day"] for r in dev})
     folds = day_folds(dev_days, args.folds)
@@ -417,6 +421,8 @@ def main():
 
         # 1-3. Day-grouped cross-validation -> number of epochs
         last_cv = None
+        if args.final_epochs and is_false(args.run_cv):
+            args.skip_cv = True  # forced epochs and no CV asked: nothing to look up
         if not args.skip_cv and is_false(args.run_cv):
             last_cv = epochs_from_last_cv(mlflow)
             if last_cv is None:
